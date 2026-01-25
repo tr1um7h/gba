@@ -9,6 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use textwrap::wrap;
+use unicode_width::UnicodeWidthStr;
 
 use super::app::{ChatMessage, MessageRole};
 
@@ -107,6 +108,30 @@ impl<'a> ChatWidget<'a> {
     }
 }
 
+/// Truncate a string to fit within a given display width.
+///
+/// This function respects UTF-8 character boundaries and accounts for
+/// the display width of characters (e.g., CJK characters are typically 2 cells wide).
+fn truncate_to_width(s: &str, max_width: usize) -> &str {
+    if max_width == 0 {
+        return "";
+    }
+
+    let mut current_width = 0;
+    let mut last_valid_idx = 0;
+
+    for (idx, ch) in s.char_indices() {
+        let char_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if current_width + char_width > max_width {
+            break;
+        }
+        current_width += char_width;
+        last_valid_idx = idx + ch.len_utf8();
+    }
+
+    &s[..last_valid_idx]
+}
+
 impl Widget for ChatWidget<'_> {
     fn render(mut self, area: Rect, buf: &mut Buffer) {
         if area.width < 10 || area.height < 1 {
@@ -136,13 +161,15 @@ impl Widget for ChatWidget<'_> {
             // Render each span in the line
             let mut x = area.x;
             for span in line.spans.iter() {
-                let span_width = span.content.len() as u16;
-                let available = area.width.saturating_sub(x - area.x);
-                let render_width = span_width.min(available);
+                let available = area.width.saturating_sub(x - area.x) as usize;
 
-                if render_width > 0 {
-                    buf.set_string(x, y, &span.content[..render_width as usize], span.style);
-                    x += render_width;
+                // Truncate string to fit available width, respecting char boundaries
+                let truncated = truncate_to_width(&span.content, available);
+                let display_width = truncated.width();
+
+                if display_width > 0 {
+                    buf.set_string(x, y, truncated, span.style);
+                    x += display_width as u16;
                 }
             }
         }
@@ -190,5 +217,44 @@ mod tests {
 
         let widget = ChatWidget::new(&messages, 2, 10, 80);
         assert_eq!(widget.scroll, 2);
+    }
+
+    #[test]
+    fn test_truncate_to_width_ascii() {
+        assert_eq!(truncate_to_width("hello", 5), "hello");
+        assert_eq!(truncate_to_width("abcdef", 3), "abc");
+        assert_eq!(truncate_to_width("hello", 0), "");
+        assert_eq!(truncate_to_width("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_to_width_chinese() {
+        // Chinese characters are typically 2 cells wide
+        let chinese = "你好世界";
+        assert_eq!(truncate_to_width(chinese, 8), "你好世界"); // 4 chars * 2 = 8
+        assert_eq!(truncate_to_width(chinese, 6), "你好世"); // 3 chars * 2 = 6
+        assert_eq!(truncate_to_width(chinese, 5), "你好"); // 5 can only fit 2 chars (4 width)
+        assert_eq!(truncate_to_width(chinese, 4), "你好"); // 2 chars * 2 = 4
+        assert_eq!(truncate_to_width(chinese, 1), ""); // 1 cell can't fit a 2-wide char
+    }
+
+    #[test]
+    fn test_truncate_to_width_mixed() {
+        // Mixed ASCII and Chinese
+        let mixed = "Hi你好";
+        assert_eq!(truncate_to_width(mixed, 6), "Hi你好"); // 2 + 2*2 = 6
+        assert_eq!(truncate_to_width(mixed, 5), "Hi你"); // 2 + 2 = 4, fits in 5
+        assert_eq!(truncate_to_width(mixed, 3), "Hi"); // Can only fit ASCII
+    }
+
+    #[test]
+    fn test_chat_widget_with_chinese() {
+        let messages = vec![
+            create_test_message(MessageRole::User, "你好世界"),
+            create_test_message(MessageRole::Assistant, "你好！"),
+        ];
+
+        let widget = ChatWidget::new(&messages, 0, 10, 80);
+        assert!(widget.total_lines() > 0);
     }
 }
