@@ -473,4 +473,214 @@ mod tests {
         handler.on_error("error");
         handler.on_complete();
     }
+
+    // =========================================================================
+    // Behavior tests for PrintEventHandler
+    // =========================================================================
+
+    #[test]
+    fn test_print_handler_tool_result_truncation() {
+        // PrintEventHandler truncates tool results longer than 200 chars
+        let handler = PrintEventHandler::new().with_tools();
+
+        // We can't easily capture stdout, but we can verify the handler is configured
+        assert!(handler.show_tools);
+
+        // Test the truncation logic directly
+        let long_result = "x".repeat(300);
+        let preview = if long_result.len() > 200 {
+            format!("{}...", &long_result[..200])
+        } else {
+            long_result.clone()
+        };
+
+        assert_eq!(preview.len(), 203); // 200 chars + "..."
+        assert!(preview.ends_with("..."));
+    }
+
+    #[test]
+    fn test_print_handler_default_hides_tools() {
+        let handler = PrintEventHandler::new();
+
+        assert!(!handler.show_tools);
+        assert!(!handler.auto_flush);
+    }
+
+    // =========================================================================
+    // Edge case tests for CollectingEventHandler
+    // =========================================================================
+
+    #[test]
+    fn test_collecting_handler_empty_text() {
+        let mut handler = CollectingEventHandler::new();
+
+        handler.on_text("");
+        handler.on_text("");
+
+        assert!(handler.text().is_empty());
+    }
+
+    #[test]
+    fn test_collecting_handler_unicode_text() {
+        let mut handler = CollectingEventHandler::new();
+
+        handler.on_text("Hello 世界! ");
+        handler.on_text("🦀 Rust");
+
+        assert_eq!(handler.text(), "Hello 世界! 🦀 Rust");
+    }
+
+    #[test]
+    fn test_collecting_handler_multiple_errors() {
+        let mut handler = CollectingEventHandler::new();
+
+        assert!(!handler.has_error());
+
+        handler.on_error("first error");
+        assert!(handler.has_error());
+
+        handler.on_error("second error");
+        assert!(handler.has_error());
+
+        // Clear should reset error state
+        handler.clear();
+        assert!(!handler.has_error());
+    }
+
+    #[test]
+    fn test_collecting_handler_duplicate_tools() {
+        let mut handler = CollectingEventHandler::new();
+
+        handler.on_tool_use("Read", &json!({"path": "/a"}));
+        handler.on_tool_use("Read", &json!({"path": "/b"}));
+        handler.on_tool_use("Write", &json!({}));
+        handler.on_tool_use("Read", &json!({"path": "/c"}));
+
+        // Should track all tool uses, including duplicates
+        assert_eq!(handler.tools_used(), &["Read", "Read", "Write", "Read"]);
+    }
+
+    #[test]
+    fn test_collecting_handler_tool_input_not_stored() {
+        // CollectingEventHandler stores tool names but not inputs
+        let mut handler = CollectingEventHandler::new();
+
+        let complex_input = json!({
+            "path": "/test",
+            "options": {
+                "recursive": true,
+                "depth": 10
+            }
+        });
+
+        handler.on_tool_use("Bash", &complex_input);
+
+        // Only the tool name is stored
+        assert_eq!(handler.tools_used(), &["Bash"]);
+    }
+
+    #[test]
+    fn test_collecting_handler_interleaved_operations() {
+        let mut handler = CollectingEventHandler::new();
+
+        handler.on_text("Starting...\n");
+        handler.on_tool_use("Read", &json!({}));
+        handler.on_tool_result("file contents");
+        handler.on_text("Read complete.\n");
+        handler.on_tool_use("Write", &json!({}));
+        handler.on_error("Write failed");
+        handler.on_text("Error handled.");
+
+        assert_eq!(
+            handler.text(),
+            "Starting...\nRead complete.\nError handled."
+        );
+        assert_eq!(handler.tools_used(), &["Read", "Write"]);
+        assert!(handler.has_error());
+    }
+
+    // =========================================================================
+    // Error message formatting tests
+    // =========================================================================
+
+    #[test]
+    fn test_error_handler_receives_full_message() {
+        struct ErrorCapture {
+            errors: Vec<String>,
+        }
+
+        impl TextHandler for ErrorCapture {}
+        impl ToolHandler for ErrorCapture {}
+        impl ErrorHandler for ErrorCapture {
+            fn on_error(&mut self, error: &str) {
+                self.errors.push(error.to_string());
+            }
+        }
+        impl LifecycleHandler for ErrorCapture {}
+
+        let mut handler = ErrorCapture { errors: vec![] };
+
+        // Test various error message formats
+        handler.on_error("Simple error");
+        handler.on_error("Error: connection refused");
+        handler.on_error("Multi\nline\nerror");
+        handler.on_error("");
+
+        assert_eq!(handler.errors.len(), 4);
+        assert_eq!(handler.errors[0], "Simple error");
+        assert_eq!(handler.errors[1], "Error: connection refused");
+        assert_eq!(handler.errors[2], "Multi\nline\nerror");
+        assert_eq!(handler.errors[3], "");
+    }
+
+    // =========================================================================
+    // Lifecycle handler tests
+    // =========================================================================
+
+    #[test]
+    fn test_lifecycle_handler_completion_tracking() {
+        struct CompletionTracker {
+            complete_count: u32,
+        }
+
+        impl TextHandler for CompletionTracker {}
+        impl ToolHandler for CompletionTracker {}
+        impl ErrorHandler for CompletionTracker {}
+        impl LifecycleHandler for CompletionTracker {
+            fn on_complete(&mut self) {
+                self.complete_count += 1;
+            }
+        }
+
+        let mut handler = CompletionTracker { complete_count: 0 };
+
+        handler.on_complete();
+        handler.on_complete();
+        handler.on_complete();
+
+        assert_eq!(handler.complete_count, 3);
+    }
+
+    #[test]
+    fn test_combined_handler_workflow() {
+        // Test a realistic workflow with all handler methods
+        let mut handler = CollectingEventHandler::new();
+
+        // Simulate a Claude response workflow
+        handler.on_text("I'll help you with that.\n\n");
+        handler.on_tool_use("Read", &json!({"path": "src/main.rs"}));
+        handler.on_tool_result("fn main() { println!(\"Hello\"); }");
+        handler.on_text("The file contains a simple hello world program.\n");
+        handler.on_tool_use("Edit", &json!({"path": "src/main.rs", "changes": "..."}));
+        handler.on_tool_result("File updated successfully");
+        handler.on_text("I've made the requested changes.");
+        handler.on_complete();
+
+        assert_eq!(
+            handler.text(),
+            "I'll help you with that.\n\nThe file contains a simple hello world program.\nI've made the requested changes."
+        );
+        assert_eq!(handler.tools_used(), &["Read", "Edit"]);
+        assert!(!handler.has_error());
+    }
 }

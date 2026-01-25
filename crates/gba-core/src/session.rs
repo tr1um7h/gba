@@ -638,4 +638,211 @@ mod tests {
         assert_eq!(stats.output_tokens, 900);
         assert!((stats.cost_usd - 0.08).abs() < f64::EPSILON);
     }
+
+    // =========================================================================
+    // SessionBuilder option merging tests
+    // =========================================================================
+
+    #[test]
+    fn test_should_build_session_with_base_options() {
+        use claude_agent_sdk_rs::ClaudeAgentOptions;
+
+        let base_options = ClaudeAgentOptions {
+            model: Some("claude-3-opus".to_string()),
+            max_turns: Some(20),
+            ..Default::default()
+        };
+
+        let builder = SessionBuilder::new(PathBuf::from("/tmp/test"))
+            .with_base_options(base_options)
+            .with_session_id("test-session".to_string());
+
+        let session = builder.build().unwrap();
+
+        assert_eq!(session.session_id(), "test-session");
+    }
+
+    #[test]
+    fn test_should_build_session_with_task_config() {
+        use crate::config::TaskConfig;
+
+        let task_config = TaskConfig {
+            preset: true,
+            tools: vec!["Read".to_string(), "Write".to_string()],
+            disallowed_tools: vec!["Bash".to_string()],
+            permission_mode: None,
+        };
+
+        let builder = SessionBuilder::new(PathBuf::from("/tmp/test")).with_task_config(task_config);
+
+        let session = builder.build().unwrap();
+
+        // Session should be created with the configured tools
+        assert!(!session.session_id().is_empty());
+    }
+
+    #[test]
+    fn test_should_generate_uuid_when_no_session_id() {
+        let builder = SessionBuilder::new(PathBuf::from("/tmp/test"));
+        let session = builder.build().unwrap();
+
+        // Session ID should be a valid UUID (36 chars with hyphens)
+        assert_eq!(session.session_id().len(), 36);
+        assert!(session.session_id().contains('-'));
+    }
+
+    // =========================================================================
+    // Connection state tests
+    // =========================================================================
+
+    #[test]
+    fn test_should_start_disconnected() {
+        let builder = SessionBuilder::new(PathBuf::from("/tmp/test"));
+        let session = builder.build().unwrap();
+
+        assert!(!session.is_connected());
+    }
+
+    #[test]
+    fn test_should_have_empty_history_initially() {
+        let builder = SessionBuilder::new(PathBuf::from("/tmp/test"));
+        let session = builder.build().unwrap();
+
+        assert!(session.history().is_empty());
+    }
+
+    #[test]
+    fn test_should_have_zero_stats_initially() {
+        let builder = SessionBuilder::new(PathBuf::from("/tmp/test"));
+        let session = builder.build().unwrap();
+
+        let stats = session.stats();
+        assert_eq!(stats.turns, 0);
+        assert_eq!(stats.input_tokens, 0);
+        assert_eq!(stats.output_tokens, 0);
+        assert!((stats.cost_usd - 0.0).abs() < f64::EPSILON);
+    }
+
+    // =========================================================================
+    // History management tests
+    // =========================================================================
+
+    #[test]
+    fn test_should_clear_history_but_keep_session_id() {
+        let builder =
+            SessionBuilder::new(PathBuf::from("/tmp/test")).with_session_id("keep-me".to_string());
+        let mut session = builder.build().unwrap();
+
+        // Add some history
+        session
+            .history
+            .push(ConversationMessage::User("q1".to_string()));
+        session
+            .history
+            .push(ConversationMessage::Assistant("a1".to_string()));
+        session
+            .history
+            .push(ConversationMessage::User("q2".to_string()));
+        session
+            .history
+            .push(ConversationMessage::Assistant("a2".to_string()));
+
+        assert_eq!(session.history().len(), 4);
+
+        session.clear();
+
+        assert!(session.history().is_empty());
+        assert_eq!(session.session_id(), "keep-me"); // Session ID preserved
+    }
+
+    #[test]
+    fn test_should_track_message_types_in_history() {
+        let builder = SessionBuilder::new(PathBuf::from("/tmp/test"));
+        let mut session = builder.build().unwrap();
+
+        session
+            .history
+            .push(ConversationMessage::User("question".to_string()));
+        session
+            .history
+            .push(ConversationMessage::Assistant("answer".to_string()));
+
+        assert!(session.history()[0].is_user());
+        assert!(!session.history()[0].is_assistant());
+        assert!(!session.history()[1].is_user());
+        assert!(session.history()[1].is_assistant());
+    }
+
+    #[test]
+    fn test_conversation_message_content_extraction() {
+        let user_msg = ConversationMessage::User("user content".to_string());
+        let assistant_msg = ConversationMessage::Assistant("assistant content".to_string());
+
+        assert_eq!(user_msg.content(), "user content");
+        assert_eq!(assistant_msg.content(), "assistant content");
+    }
+
+    #[test]
+    fn test_should_handle_empty_messages() {
+        let empty_user = ConversationMessage::User(String::new());
+        let empty_assistant = ConversationMessage::Assistant(String::new());
+
+        assert!(empty_user.content().is_empty());
+        assert!(empty_assistant.content().is_empty());
+        assert!(empty_user.is_user());
+        assert!(empty_assistant.is_assistant());
+    }
+
+    #[test]
+    fn test_should_handle_unicode_in_messages() {
+        let unicode_user = ConversationMessage::User("Hello 世界! 🦀".to_string());
+        let unicode_assistant =
+            ConversationMessage::Assistant("Bonjour! こんにちは 👋".to_string());
+
+        assert_eq!(unicode_user.content(), "Hello 世界! 🦀");
+        assert_eq!(unicode_assistant.content(), "Bonjour! こんにちは 👋");
+    }
+
+    #[test]
+    fn test_should_preserve_multiline_messages() {
+        let multiline = ConversationMessage::User("Line 1\nLine 2\nLine 3".to_string());
+
+        assert_eq!(multiline.content(), "Line 1\nLine 2\nLine 3");
+        assert!(multiline.content().contains('\n'));
+    }
+
+    // =========================================================================
+    // Session Debug implementation test
+    // =========================================================================
+
+    #[test]
+    fn test_session_debug_format() {
+        let builder = SessionBuilder::new(PathBuf::from("/tmp/test"))
+            .with_session_id("debug-test".to_string());
+        let mut session = builder.build().unwrap();
+
+        // Add some history for the debug output
+        session
+            .history
+            .push(ConversationMessage::User("test".to_string()));
+
+        let debug_output = format!("{:?}", session);
+
+        // Debug output should include key fields
+        assert!(debug_output.contains("Session"));
+        assert!(debug_output.contains("debug-test"));
+        assert!(debug_output.contains("history_len"));
+        assert!(debug_output.contains("connected"));
+    }
+
+    #[test]
+    fn test_session_builder_debug_format() {
+        let builder = SessionBuilder::new(PathBuf::from("/tmp/workdir"))
+            .with_session_id("builder-test".to_string());
+
+        let debug_output = format!("{:?}", builder);
+
+        assert!(debug_output.contains("SessionBuilder"));
+        assert!(debug_output.contains("workdir"));
+    }
 }

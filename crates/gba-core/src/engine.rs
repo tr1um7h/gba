@@ -737,4 +737,412 @@ disallowedTools:
 
         assert_eq!(options.disallowed_tools, vec!["Write", "Edit"]);
     }
+
+    // =========================================================================
+    // Non-preset system prompt rendering tests
+    // =========================================================================
+
+    #[test]
+    fn test_should_render_system_prompt_without_preset() {
+        let temp_dir = TempDir::new().unwrap();
+        let tasks_dir = temp_dir.path().join("tasks").join("custom");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        // Create config with preset=false
+        fs::write(
+            tasks_dir.join("config.yml"),
+            r#"
+preset: false
+tools: []
+disallowedTools: []
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            tasks_dir.join("system.j2"),
+            "Custom system prompt for {{ task_name }}.",
+        )
+        .unwrap();
+        fs::write(tasks_dir.join("user.j2"), "Do the custom task.").unwrap();
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(temp_dir.path().join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(temp_dir.path())
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let task = Task::new(
+            TaskKind::Custom("custom".to_string()),
+            json!({"task_name": "testing"}),
+        );
+        let task_config = engine.load_task_config(&task.kind).unwrap();
+
+        let system_prompt = engine.render_system_prompt(&task, &task_config).unwrap();
+
+        match system_prompt {
+            Some(SystemPrompt::Text(text)) => {
+                assert_eq!(text, "Custom system prompt for testing.");
+            }
+            _ => panic!("Expected plain text system prompt for non-preset config"),
+        }
+    }
+
+    // =========================================================================
+    // Missing template fallback tests
+    // =========================================================================
+
+    #[test]
+    fn test_should_fallback_to_preset_when_no_system_template() {
+        let temp_dir = TempDir::new().unwrap();
+        let tasks_dir = temp_dir.path().join("tasks").join("minimal");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        // Create config but NO system.j2 template
+        fs::write(
+            tasks_dir.join("config.yml"),
+            r#"
+preset: true
+tools: []
+disallowedTools: []
+"#,
+        )
+        .unwrap();
+
+        // Only create user.j2, no system.j2
+        fs::write(tasks_dir.join("user.j2"), "Execute minimal task.").unwrap();
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(temp_dir.path().join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(temp_dir.path())
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let task = Task::new(TaskKind::Custom("minimal".to_string()), json!({}));
+        let task_config = engine.load_task_config(&task.kind).unwrap();
+
+        let system_prompt = engine.render_system_prompt(&task, &task_config).unwrap();
+
+        // Should fall back to preset when template is missing
+        match system_prompt {
+            Some(SystemPrompt::Preset(preset)) => {
+                assert_eq!(preset.preset, "claude_code");
+                assert!(preset.append.is_none());
+            }
+            _ => panic!("Expected preset fallback when no system template exists"),
+        }
+    }
+
+    #[test]
+    fn test_should_return_none_when_no_system_template_and_no_preset() {
+        let temp_dir = TempDir::new().unwrap();
+        let tasks_dir = temp_dir.path().join("tasks").join("bare");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        // Create config with preset=false and NO system.j2 template
+        fs::write(
+            tasks_dir.join("config.yml"),
+            r#"
+preset: false
+tools: []
+disallowedTools: []
+"#,
+        )
+        .unwrap();
+
+        fs::write(tasks_dir.join("user.j2"), "Execute bare task.").unwrap();
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(temp_dir.path().join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(temp_dir.path())
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let task = Task::new(TaskKind::Custom("bare".to_string()), json!({}));
+        let task_config = engine.load_task_config(&task.kind).unwrap();
+
+        let system_prompt = engine.render_system_prompt(&task, &task_config).unwrap();
+
+        // Should return None when no template and no preset
+        assert!(system_prompt.is_none());
+    }
+
+    // =========================================================================
+    // Agent options building with all configurations
+    // =========================================================================
+
+    #[test]
+    fn test_should_build_agent_options_with_tools() {
+        let temp_dir = TempDir::new().unwrap();
+        let tasks_dir = temp_dir.path().join("tasks").join("restricted");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        fs::write(
+            tasks_dir.join("config.yml"),
+            r#"
+preset: true
+tools:
+  - Read
+  - Grep
+  - Glob
+disallowedTools: []
+"#,
+        )
+        .unwrap();
+
+        fs::write(tasks_dir.join("system.j2"), "Read-only mode.").unwrap();
+        fs::write(tasks_dir.join("user.j2"), "Search for files.").unwrap();
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(temp_dir.path().join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(temp_dir.path())
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let task_config = engine
+            .load_task_config(&TaskKind::Custom("restricted".to_string()))
+            .unwrap();
+
+        let options = engine.build_agent_options(&task_config, None);
+
+        // Tools should be set
+        assert!(options.tools.is_some());
+    }
+
+    #[test]
+    fn test_should_build_agent_options_with_permission_mode() {
+        use crate::config::TaskPermissionMode;
+
+        let temp_dir = TempDir::new().unwrap();
+        let tasks_dir = temp_dir.path().join("tasks").join("manual");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        fs::write(
+            tasks_dir.join("config.yml"),
+            r#"
+preset: true
+tools: []
+disallowedTools: []
+permissionMode: acceptEdits
+"#,
+        )
+        .unwrap();
+
+        fs::write(tasks_dir.join("system.j2"), "Manual approval mode.").unwrap();
+        fs::write(tasks_dir.join("user.j2"), "Make changes.").unwrap();
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(temp_dir.path().join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(temp_dir.path())
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let task_config = engine
+            .load_task_config(&TaskKind::Custom("manual".to_string()))
+            .unwrap();
+
+        // Verify task config has the permission mode
+        assert_eq!(
+            task_config.permission_mode,
+            Some(TaskPermissionMode::AcceptEdits)
+        );
+
+        let options = engine.build_agent_options(&task_config, None);
+
+        // Permission mode should be set
+        assert_eq!(options.permission_mode, Some(PermissionMode::AcceptEdits));
+    }
+
+    #[test]
+    fn test_should_build_agent_options_with_base_options() {
+        let temp_dir = TempDir::new().unwrap();
+        let tasks_dir = temp_dir.path().join("tasks").join("init");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        fs::write(
+            tasks_dir.join("config.yml"),
+            r#"
+preset: true
+tools: []
+disallowedTools: []
+"#,
+        )
+        .unwrap();
+
+        fs::write(tasks_dir.join("system.j2"), "Init task.").unwrap();
+        fs::write(tasks_dir.join("user.j2"), "Initialize.").unwrap();
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(temp_dir.path().join("tasks")).unwrap();
+
+        // Create engine with base options
+        let base_options = ClaudeAgentOptions {
+            model: Some("claude-3-opus".to_string()),
+            max_turns: Some(50),
+            ..Default::default()
+        };
+
+        let config = EngineConfig::builder()
+            .workdir(temp_dir.path())
+            .prompts(prompts)
+            .agent_options(Some(base_options))
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let task_config = engine.load_task_config(&TaskKind::Init).unwrap();
+
+        let options = engine.build_agent_options(&task_config, None);
+
+        // Base options should be merged
+        assert_eq!(options.model, Some("claude-3-opus".to_string()));
+        assert_eq!(options.max_turns, Some(50));
+    }
+
+    #[test]
+    fn test_should_set_workdir_in_agent_options() {
+        let temp_dir = TempDir::new().unwrap();
+        let workdir = create_test_task_dir(&temp_dir);
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(workdir.join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(&workdir)
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let task_config = engine.load_task_config(&TaskKind::Init).unwrap();
+
+        let options = engine.build_agent_options(&task_config, None);
+
+        assert_eq!(options.cwd, Some(workdir));
+    }
+
+    #[test]
+    fn test_should_skip_version_check() {
+        let temp_dir = TempDir::new().unwrap();
+        let workdir = create_test_task_dir(&temp_dir);
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(workdir.join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(&workdir)
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let task_config = engine.load_task_config(&TaskKind::Init).unwrap();
+
+        let options = engine.build_agent_options(&task_config, None);
+
+        // Version check should be skipped for faster execution
+        assert!(options.skip_version_check);
+    }
+
+    // =========================================================================
+    // Session creation tests
+    // =========================================================================
+
+    #[test]
+    fn test_should_create_session_from_engine() {
+        let temp_dir = TempDir::new().unwrap();
+        let workdir = create_test_task_dir(&temp_dir);
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(workdir.join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(&workdir)
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let session = engine.session(None).unwrap();
+
+        assert!(!session.session_id().is_empty());
+        assert!(!session.is_connected());
+    }
+
+    #[test]
+    fn test_should_create_session_with_custom_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let workdir = create_test_task_dir(&temp_dir);
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(workdir.join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(&workdir)
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let session = engine
+            .session(Some("my-custom-session".to_string()))
+            .unwrap();
+
+        assert_eq!(session.session_id(), "my-custom-session");
+    }
+
+    #[test]
+    fn test_should_create_session_with_task_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let workdir = create_test_task_dir(&temp_dir);
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(workdir.join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(&workdir)
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let session = engine
+            .session_with_task(&TaskKind::Init, &json!({"repo_path": "/test"}), None)
+            .unwrap();
+
+        assert!(!session.session_id().is_empty());
+    }
+
+    // =========================================================================
+    // Engine Debug implementation test
+    // =========================================================================
+
+    #[test]
+    fn test_engine_debug_format() {
+        let temp_dir = TempDir::new().unwrap();
+        let workdir = create_test_task_dir(&temp_dir);
+
+        let mut prompts = PromptManager::new();
+        prompts.load_dir(workdir.join("tasks")).unwrap();
+
+        let config = EngineConfig::builder()
+            .workdir(&workdir)
+            .prompts(prompts)
+            .build();
+
+        let engine = Engine::new(config).unwrap();
+        let debug_output = format!("{:?}", engine);
+
+        assert!(debug_output.contains("Engine"));
+        assert!(debug_output.contains("workdir"));
+    }
 }
