@@ -3,6 +3,26 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 ---
+## [gba-pm-v0.2.3](https://github.com/compare/gba-pm-v0.2.2..gba-pm-v0.2.3) - 2026-01-25
+
+### Bug Fixes
+
+- **(tui)** handle UTF-8 character boundaries when rendering chat messages (#5) - ([f147ef2](https://github.com/commit/f147ef2376cec885ebd83d1c30e179294ce909d1)) - Tyr Chen
+- improve UTF-8 handling and test isolation - ([7135557](https://github.com/commit/713555754baea93e820a657b7facfdb3e988f71e)) - Tyr Chen
+
+### Features
+
+- **(centralized-git)** Centralize git/gh operations into gba-core module (#6) - ([0ceec51](https://github.com/commit/0ceec51cd35fc75ab2bd1b6e4e68cdad58215a59)) - Tyr Chen
+
+### Miscellaneous Chores
+
+- update arch doc - ([a57d925](https://github.com/commit/a57d925910375a980ee128cd7a474c86791d4b45)) - Tyr Chen
+
+### Other
+
+- Update CHANGELOG.md - ([1a7a2a3](https://github.com/commit/1a7a2a3aeab092a4b0ddf80d9a1fc25be1cf71c4)) - Tyr Chen
+
+---
 ## [gba-pm-v0.2.2] - 2026-01-25
 
 ### Bug Fixes
