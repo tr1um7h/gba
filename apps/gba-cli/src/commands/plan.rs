@@ -83,8 +83,19 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
             state.feature.slug
         );
     } else {
-        println!();
-        println!("Planning session cancelled.");
+        // Check if state.yml exists but couldn't be parsed
+        let state_file = utils::feature_state_file(workdir, slug);
+        if state_file.exists() {
+            eprintln!();
+            eprintln!("Error: state.yml exists but has invalid format.");
+            eprintln!("File: {}", state_file.display());
+            eprintln!();
+            eprintln!("Please check that state.yml matches the expected YAML structure.");
+            eprintln!("You may need to manually fix or delete it and run `gba plan` again.");
+        } else {
+            println!();
+            println!("Planning session cancelled.");
+        }
     }
 
     Ok(())

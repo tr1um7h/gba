@@ -421,7 +421,8 @@ impl App {
         match FeatureState::load(&state_dir) {
             Ok(state) => Some(state),
             Err(e) => {
-                debug!(error = %e, "could not load state.yml, plan may not be complete");
+                // Log at warn level so user can see what went wrong
+                warn!(error = %e, "failed to load state.yml - format may be incorrect");
                 None
             }
         }
