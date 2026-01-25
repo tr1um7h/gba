@@ -5,8 +5,8 @@
 
 use std::io::{BufRead, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
 
+use gba_core::git::{GitHub, GitRepo, PrStatus};
 use tracing::{debug, info, warn};
 
 use crate::error::CliError;
@@ -23,14 +23,6 @@ struct WorktreeInfo {
     slug: String,
     /// PR status if found.
     pr_status: Option<PrStatus>,
-}
-
-/// PR status from GitHub.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PrStatus {
-    Open,
-    Merged,
-    Closed,
 }
 
 /// Clean up worktrees for closed/merged PRs.
@@ -183,65 +175,34 @@ fn list_worktrees(workdir: &Path) -> Result<Vec<WorktreeInfo>, CliError> {
 
 /// Get the branch name for a worktree.
 fn get_worktree_branch(worktree_path: &Path) -> Result<Option<String>, CliError> {
-    let output = Command::new("git")
-        .current_dir(worktree_path)
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .map_err(|e| CliError::Git(format!("failed to get branch: {}", e)))?;
-
-    if !output.status.success() {
-        debug!(
-            "failed to get branch for {}: {}",
-            worktree_path.display(),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return Ok(None);
+    let repo = GitRepo::new(worktree_path);
+    match repo.current_branch() {
+        Ok(branch) => Ok(Some(branch)),
+        Err(e) => {
+            debug!(
+                "failed to get branch for {}: {}",
+                worktree_path.display(),
+                e
+            );
+            Ok(None)
+        }
     }
-
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(Some(branch))
 }
 
 /// Get PR status for a branch using gh CLI.
 fn get_pr_status(workdir: &Path, branch: &str) -> Result<Option<PrStatus>, CliError> {
-    // Use gh pr view to get PR status
-    // Suppress stderr to prevent progress indicators from messing up console output
-    let output = Command::new("gh")
-        .current_dir(workdir)
-        .args(["pr", "view", branch, "--json", "state", "--jq", ".state"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| CliError::Git(format!("failed to run gh pr view: {}", e)))?;
-
-    if !output.status.success() {
-        // No PR found for this branch
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("no pull requests found")
-            || stderr.contains("Could not resolve")
-            || stderr.contains("no pull request found")
-        {
-            debug!("no PR found for branch {}", branch);
-            return Ok(None);
+    let gh = GitHub::new(workdir);
+    match gh.pr_status(branch) {
+        Ok(status) => {
+            if status.is_none() {
+                debug!("no PR found for branch {}", branch);
+            }
+            Ok(status)
         }
-        warn!("gh pr view failed for {}: {}", branch, stderr);
-        return Ok(None);
-    }
-
-    let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(parse_pr_state(&state))
-}
-
-/// Parse PR state from gh CLI output.
-///
-/// The gh CLI returns states like "OPEN", "MERGED", "CLOSED".
-/// This function normalizes the input and returns the appropriate status.
-fn parse_pr_state(state: &str) -> Option<PrStatus> {
-    match state.trim().to_uppercase().as_str() {
-        "OPEN" => Some(PrStatus::Open),
-        "MERGED" => Some(PrStatus::Merged),
-        "CLOSED" => Some(PrStatus::Closed),
-        _ => None,
+        Err(e) => {
+            warn!("gh pr view failed for {}: {}", branch, e);
+            Ok(None)
+        }
     }
 }
 
@@ -310,16 +271,11 @@ fn clean_worktree(workdir: &Path, wt: &WorktreeInfo) -> Result<(), CliError> {
     info!("cleaning up worktree: {} ({})", wt.slug, wt.branch);
     println!("  Removing worktree: {}", wt.slug);
 
-    // Remove the worktree
-    let output = Command::new("git")
-        .current_dir(workdir)
-        .args(["worktree", "remove", "--force", &wt.path])
-        .output()
-        .map_err(|e| CliError::Git(format!("failed to remove worktree: {}", e)))?;
+    let repo = GitRepo::new(workdir);
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!("failed to remove worktree {}: {}", wt.slug, stderr);
+    // Remove the worktree
+    if let Err(e) = repo.remove_worktree(&wt.path, true) {
+        warn!("failed to remove worktree {}: {}", wt.slug, e);
         // Try to force remove the directory
         if let Err(e) = std::fs::remove_dir_all(&wt.path) {
             warn!("failed to remove directory {}: {}", wt.path, e);
@@ -328,17 +284,11 @@ fn clean_worktree(workdir: &Path, wt: &WorktreeInfo) -> Result<(), CliError> {
 
     // Delete the local branch
     println!("  Deleting branch: {}", wt.branch);
-    let output = Command::new("git")
-        .current_dir(workdir)
-        .args(["branch", "-D", &wt.branch])
-        .output()
-        .map_err(|e| CliError::Git(format!("failed to delete branch: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if let Err(e) = repo.delete_branch(&wt.branch, true) {
         // Branch might already be deleted, that's okay
-        if !stderr.contains("not found") {
-            warn!("failed to delete branch {}: {}", wt.branch, stderr);
+        let error_msg = e.to_string();
+        if !error_msg.contains("not found") {
+            warn!("failed to delete branch {}: {}", wt.branch, e);
         }
     }
 
@@ -359,33 +309,6 @@ mod tests {
             slug: slug.to_string(),
             pr_status: status,
         }
-    }
-
-    // Tests for parse_pr_state
-    #[test]
-    fn test_parse_pr_state_open() {
-        assert_eq!(parse_pr_state("OPEN"), Some(PrStatus::Open));
-        assert_eq!(parse_pr_state("open"), Some(PrStatus::Open));
-        assert_eq!(parse_pr_state("  OPEN  "), Some(PrStatus::Open));
-    }
-
-    #[test]
-    fn test_parse_pr_state_merged() {
-        assert_eq!(parse_pr_state("MERGED"), Some(PrStatus::Merged));
-        assert_eq!(parse_pr_state("merged"), Some(PrStatus::Merged));
-    }
-
-    #[test]
-    fn test_parse_pr_state_closed() {
-        assert_eq!(parse_pr_state("CLOSED"), Some(PrStatus::Closed));
-        assert_eq!(parse_pr_state("closed"), Some(PrStatus::Closed));
-    }
-
-    #[test]
-    fn test_parse_pr_state_unknown() {
-        assert_eq!(parse_pr_state("UNKNOWN"), None);
-        assert_eq!(parse_pr_state(""), None);
-        assert_eq!(parse_pr_state("draft"), None);
     }
 
     // Tests for should_clean

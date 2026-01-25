@@ -44,6 +44,14 @@ pub enum EngineError {
     /// Task configuration not found.
     #[error("task configuration not found for task kind: {0}")]
     TaskConfigNotFound(String),
+
+    /// Git operation error.
+    #[error("git error: {0}")]
+    GitError(String),
+
+    /// GitHub CLI operation error.
+    #[error("github cli error: {0}")]
+    GitHubError(String),
 }
 
 impl EngineError {
@@ -66,6 +74,16 @@ impl EngineError {
     /// Create a new configuration error.
     pub fn config_error(message: impl Into<String>) -> Self {
         Self::ConfigError(message.into())
+    }
+
+    /// Create a new Git error.
+    pub fn git_error(message: impl Into<String>) -> Self {
+        Self::GitError(message.into())
+    }
+
+    /// Create a new GitHub CLI error.
+    pub fn github_error(message: impl Into<String>) -> Self {
+        Self::GitHubError(message.into())
     }
 }
 
@@ -94,5 +112,17 @@ mod tests {
     fn test_should_display_task_config_not_found() {
         let err = EngineError::TaskConfigNotFound("custom_task".to_string());
         assert!(err.to_string().contains("custom_task"));
+    }
+
+    #[test]
+    fn test_should_display_git_error() {
+        let err = EngineError::git_error("failed to get branch");
+        assert_eq!(err.to_string(), "git error: failed to get branch");
+    }
+
+    #[test]
+    fn test_should_display_github_error() {
+        let err = EngineError::github_error("failed to get PR status");
+        assert_eq!(err.to_string(), "github cli error: failed to get PR status");
     }
 }

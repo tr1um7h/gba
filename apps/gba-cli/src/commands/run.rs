@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use gba_core::git::GitRepo;
 use gba_core::{Engine, Task, TaskKind};
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -1106,18 +1107,8 @@ fn detect_resume_point(state: &FeatureState) -> usize {
 
 /// Get the latest commit SHA from the worktree.
 fn get_latest_commit_sha(ctx: &TaskContext) -> Result<Option<String>, CliError> {
-    let output = std::process::Command::new("git")
-        .current_dir(&ctx.worktree_path)
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .map_err(|e| CliError::Git(format!("failed to get commit SHA: {}", e)))?;
-
-    if output.status.success() {
-        let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(Some(sha))
-    } else {
-        Ok(None)
-    }
+    let repo = GitRepo::new(&ctx.worktree_path);
+    repo.head_short_sha().map_err(Into::into)
 }
 
 /// Commit and push state.yml changes after PR creation.
@@ -1131,17 +1122,10 @@ fn commit_and_push_state_update(
     pr_number: Option<u32>,
 ) -> Result<(), CliError> {
     let state_file = format!(".gba/{}/state.yml", feature_slug);
+    let repo = GitRepo::new(&ctx.worktree_path);
 
     // Stage the state file
-    let status = std::process::Command::new("git")
-        .current_dir(&ctx.worktree_path)
-        .args(["add", &state_file])
-        .status()
-        .map_err(|e| CliError::Git(format!("failed to stage state file: {}", e)))?;
-
-    if !status.success() {
-        return Err(CliError::Git("failed to stage state file".to_string()));
-    }
+    repo.add(&state_file)?;
 
     // Commit with appropriate message
     let commit_msg = match pr_number {
@@ -1149,27 +1133,13 @@ fn commit_and_push_state_update(
         None => format!("chore({}): update state after PR creation", feature_slug),
     };
 
-    let status = std::process::Command::new("git")
-        .current_dir(&ctx.worktree_path)
-        .args(["commit", "-m", &commit_msg])
-        .status()
-        .map_err(|e| CliError::Git(format!("failed to commit state: {}", e)))?;
-
-    if !status.success() {
+    if let Err(e) = repo.commit(&commit_msg) {
         // Commit may fail if no changes (already committed) - this is ok
-        tracing::debug!("state commit returned non-zero (may be no changes)");
+        tracing::debug!("state commit failed (may be no changes): {}", e);
     }
 
     // Push to origin
-    let status = std::process::Command::new("git")
-        .current_dir(&ctx.worktree_path)
-        .args(["push"])
-        .status()
-        .map_err(|e| CliError::Git(format!("failed to push state: {}", e)))?;
-
-    if !status.success() {
-        return Err(CliError::Git("failed to push state changes".to_string()));
-    }
+    repo.push()?;
 
     Ok(())
 }

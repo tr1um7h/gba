@@ -44,11 +44,24 @@ pub enum CliError {
     #[error("Prompt error: {0}")]
     Prompt(#[from] gba_pm::PromptError),
 
-    /// Engine error.
+    /// Engine error (non-git).
+    ///
+    /// Note: `EngineError::GitError` and `EngineError::GitHubError` are mapped
+    /// to `CliError::Git` via the manual `From` implementation below.
     #[error("Engine error: {0}")]
-    Engine(#[from] gba_core::EngineError),
+    Engine(gba_core::EngineError),
 
     /// IO error.
     #[error("IO error: {0}")]
     Io(String),
+}
+
+impl From<gba_core::EngineError> for CliError {
+    fn from(err: gba_core::EngineError) -> Self {
+        match err {
+            gba_core::EngineError::GitError(msg) => CliError::Git(msg),
+            gba_core::EngineError::GitHubError(msg) => CliError::Git(msg),
+            other => CliError::Engine(other),
+        }
+    }
 }

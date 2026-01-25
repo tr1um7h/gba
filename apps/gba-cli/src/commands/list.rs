@@ -6,9 +6,9 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::Result;
+use gba_core::git::GitRepo;
 use tracing::debug;
 
 use crate::error::CliError;
@@ -226,18 +226,8 @@ fn collect_all_features(workdir: &Path) -> Result<Vec<FeatureInfo>, CliError> {
 
 /// Get feature ID from worktree branch name.
 fn get_feature_id_from_worktree(worktree_path: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .current_dir(worktree_path)
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let branch = String::from_utf8_lossy(&output.stdout);
-    let branch = branch.trim();
+    let repo = GitRepo::new(worktree_path);
+    let branch = repo.current_branch().ok()?;
 
     // Parse feature/<id>-<slug> format
     branch

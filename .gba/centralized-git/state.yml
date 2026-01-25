@@ -1,0 +1,49 @@
+feature:
+  id: '0001'
+  slug: centralized-git
+  createdAt: 2026-01-25T20:52:30.293821Z
+  updatedAt: 2026-01-25T21:04:56.664545Z
+status: completed
+currentPhase: 1
+git:
+  worktreePath: .trees/centralized-git
+  branch: feature/0001-centralized-git
+  baseBranch: master
+phases:
+- name: core-git-module
+  status: completed
+  startedAt: 2026-01-25T20:53:04.927350Z
+  completedAt: 2026-01-25T20:55:52.856687Z
+  commitSha: 7ba2e10
+  stats:
+    turns: 24
+    inputTokens: 24
+    outputTokens: 9865
+    costUsd: 1.0231120000000002
+- name: migrate-cli-commands
+  status: completed
+  startedAt: 2026-01-25T20:55:52.856900Z
+  completedAt: 2026-01-25T21:00:40.336354Z
+  commitSha: 68f4cc3
+  stats:
+    turns: 54
+    inputTokens: 21463
+    outputTokens: 18324
+    costUsd: 3.273202499999999
+totalStats:
+  turns: 78
+  inputTokens: 21487
+  outputTokens: 28189
+  costUsd: 4.296314499999999
+result:
+  prUrl: https://github.com/tyrchen/gba/pull/6
+  prNumber: 6
+  merged: false
+  review:
+    status: passed
+    iterations: 1
+    completedAt: 2026-01-25T21:02:17.823861Z
+  verification:
+    status: passed
+    iterations: 1
+    completedAt: 2026-01-25T21:04:16.543383Z

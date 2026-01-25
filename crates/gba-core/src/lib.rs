@@ -164,6 +164,7 @@ mod config;
 mod engine;
 mod error;
 pub mod event;
+pub mod git;
 pub mod session;
 mod task;
 

@@ -4,10 +4,10 @@
 //! TUI session to plan a new feature through conversation with Claude.
 
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use gba_core::git::GitRepo;
 use tracing::info;
 
 use crate::error::CliError;
@@ -150,21 +150,8 @@ fn handle_existing_worktree(
     worktree_path: &Path,
 ) -> Result<(String, String, String, bool), CliError> {
     // Get the branch name from the worktree
-    let branch_output = Command::new("git")
-        .current_dir(worktree_path)
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .map_err(|e| CliError::Git(format!("failed to get branch: {}", e)))?;
-
-    if !branch_output.status.success() {
-        return Err(CliError::Git(
-            "failed to get branch name from worktree".to_string(),
-        ));
-    }
-
-    let branch_name = String::from_utf8_lossy(&branch_output.stdout)
-        .trim()
-        .to_string();
+    let repo = GitRepo::new(worktree_path);
+    let branch_name = repo.current_branch()?;
 
     // Extract feature ID from branch name (format: feature/<id>-<slug>)
     let feature_id = branch_name
@@ -248,26 +235,8 @@ fn create_worktree(
     worktree_path: &Path,
     branch_name: &str,
 ) -> Result<(), CliError> {
-    let output = Command::new("git")
-        .current_dir(workdir)
-        .args([
-            "worktree",
-            "add",
-            worktree_path.to_string_lossy().as_ref(),
-            "-b",
-            branch_name,
-        ])
-        .output()
-        .map_err(|e| CliError::Git(format!("failed to run git worktree add: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliError::Git(format!(
-            "failed to create worktree: {}",
-            stderr.trim()
-        )));
-    }
-
+    let repo = GitRepo::new(workdir);
+    repo.create_worktree(worktree_path, branch_name)?;
     Ok(())
 }
 
