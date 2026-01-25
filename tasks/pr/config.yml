@@ -3,4 +3,4 @@
 preset: true
 tools: []              # empty = all tools allowed (needs git, gh, read)
 disallowedTools: []
-permissionMode: bypass_permissions
+permissionMode: bypassPermissions

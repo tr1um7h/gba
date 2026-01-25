@@ -1,6 +1,6 @@
 agent:
-  permission_mode: auto
+  permissionMode: auto
 git:
-  auto_commit: true
+  autoCommit: true
 review:
   enabled: true

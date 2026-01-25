@@ -1,0 +1,39 @@
+feature:
+  id: '0003'
+  slug: add-pr-in-status-yml
+  createdAt: 2026-01-25T19:34:25.973903Z
+  updatedAt: 2026-01-25T19:45:09.973208Z
+status: completed
+currentPhase: 0
+git:
+  worktreePath: .trees/add-pr-in-status-yml
+  branch: feature/0003-add-pr-in-status-yml
+  baseBranch: master
+phases:
+- name: impl
+  status: completed
+  startedAt: 2026-01-25T19:39:10.276415Z
+  completedAt: 2026-01-25T19:41:34.010549Z
+  commitSha: a5834ad
+  stats:
+    turns: 27
+    inputTokens: 26
+    outputTokens: 5458
+    costUsd: 1.1370842500000002
+totalStats:
+  turns: 27
+  inputTokens: 26
+  outputTokens: 5458
+  costUsd: 1.1370842500000002
+result:
+  prUrl: https://github.com/tyrchen/gba/pull/4
+  prNumber: 4
+  merged: false
+  review:
+    status: passed
+    iterations: 1
+    completedAt: 2026-01-25T19:43:15.749537Z
+  verification:
+    status: passed
+    iterations: 1
+    completedAt: 2026-01-25T19:44:24.672743Z

@@ -3,4 +3,4 @@
 preset: true
 tools: []              # empty = all tools allowed
 disallowedTools: []    # needs full access to fix issues
-permissionMode: bypass_permissions
+permissionMode: bypassPermissions

@@ -577,6 +577,16 @@ async fn execute_full_pipeline_with_tui(
     }
     state.save(&feature_dir)?;
 
+    // Commit and push state.yml to persist PR info
+    if !dry_run
+        && state.result.pr_url.is_some()
+        && let Err(e) =
+            commit_and_push_state_update(&ctx, &state.feature.slug, state.result.pr_number)
+    {
+        warn!("Failed to commit/push state update: {}", e);
+        // Non-fatal: PR was created successfully, state just wasn't persisted to git
+    }
+
     // Send complete signal
     let _ = tx.send(RunMessage::Complete).await;
 
@@ -1105,6 +1115,60 @@ fn get_latest_commit_sha(ctx: &TaskContext) -> Result<Option<String>, CliError> 
     } else {
         Ok(None)
     }
+}
+
+/// Commit and push state.yml changes after PR creation.
+///
+/// This ensures PR information (url, number) is persisted in the repository.
+/// The function is non-fatal: if commit/push fails, it logs a warning but
+/// does not fail the overall execution.
+fn commit_and_push_state_update(
+    ctx: &TaskContext,
+    feature_slug: &str,
+    pr_number: Option<u32>,
+) -> Result<(), CliError> {
+    let state_file = format!(".gba/{}/state.yml", feature_slug);
+
+    // Stage the state file
+    let status = std::process::Command::new("git")
+        .current_dir(&ctx.worktree_path)
+        .args(["add", &state_file])
+        .status()
+        .map_err(|e| CliError::Git(format!("failed to stage state file: {}", e)))?;
+
+    if !status.success() {
+        return Err(CliError::Git("failed to stage state file".to_string()));
+    }
+
+    // Commit with appropriate message
+    let commit_msg = match pr_number {
+        Some(num) => format!("chore({}): record PR #{} in state", feature_slug, num),
+        None => format!("chore({}): update state after PR creation", feature_slug),
+    };
+
+    let status = std::process::Command::new("git")
+        .current_dir(&ctx.worktree_path)
+        .args(["commit", "-m", &commit_msg])
+        .status()
+        .map_err(|e| CliError::Git(format!("failed to commit state: {}", e)))?;
+
+    if !status.success() {
+        // Commit may fail if no changes (already committed) - this is ok
+        tracing::debug!("state commit returned non-zero (may be no changes)");
+    }
+
+    // Push to origin
+    let status = std::process::Command::new("git")
+        .current_dir(&ctx.worktree_path)
+        .args(["push"])
+        .status()
+        .map_err(|e| CliError::Git(format!("failed to push state: {}", e)))?;
+
+    if !status.success() {
+        return Err(CliError::Git("failed to push state changes".to_string()));
+    }
+
+    Ok(())
 }
 
 /// Create a pull request using LLM to generate description.

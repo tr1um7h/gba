@@ -2,4 +2,4 @@
 preset: true
 tools: []              # empty = all tools allowed
 disallowedTools: []    # empty = no restrictions
-permissionMode: bypass_permissions  # no approval needed for automated execution
+permissionMode: bypassPermissions  # no approval needed for automated execution
