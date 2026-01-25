@@ -65,6 +65,22 @@ impl CheckConfig {
     }
 }
 
+/// Result of a check-fix loop iteration.
+///
+/// This enum provides proper semantics for distinguishing between:
+/// - A check that passed (the code is good)
+/// - A check that found issues (needs changes)
+/// - A check that failed to run (error in the check itself)
+#[derive(Debug)]
+enum CheckResult {
+    /// Check passed successfully.
+    Passed,
+    /// Check ran but found issues that need to be addressed.
+    NeedsChanges(String),
+    /// Check itself failed to run (e.g., network error, tool unavailable).
+    Error(CliError),
+}
+
 /// Context for task execution, holding commonly used paths and identifiers.
 ///
 /// This struct eliminates repeated calculation of `worktree_path` and provides
@@ -112,12 +128,12 @@ impl TaskContext {
 ///
 /// # Returns
 ///
-/// Returns `true` if the check passed, `false` if it failed after max iterations.
+/// Returns `CheckResult` indicating whether the check passed, needs changes, or encountered an error.
 async fn run_check_fix_loop<C, F, CF, FF>(
     config: &CheckConfig,
     check_fn: C,
     fix_fn: F,
-) -> Result<bool, CliError>
+) -> CheckResult
 where
     C: Fn() -> CF,
     CF: Future<Output = Result<String, CliError>>,
@@ -140,7 +156,7 @@ where
                 if config.is_success(&output) {
                     println!();
                     println!("{}", config.pass_message);
-                    return Ok(true);
+                    return CheckResult::Passed;
                 } else if config.is_failure(&output) {
                     println!();
                     println!("{}", config.fail_message);
@@ -167,6 +183,11 @@ where
                             "Max fix iterations reached. {} still requires changes.",
                             capitalize_first(config.name)
                         );
+                        return CheckResult::NeedsChanges(format!(
+                            "{} still requires changes after {} fix iterations",
+                            capitalize_first(config.name),
+                            MAX_FIX_ITERATIONS
+                        ));
                     }
                 } else {
                     // No clear verdict, treat as passed
@@ -175,20 +196,23 @@ where
                         "{}: No blocking issues found",
                         capitalize_first(config.name)
                     );
-                    return Ok(true);
+                    return CheckResult::Passed;
                 }
             }
             Err(e) => {
                 warn!("{} failed: {}", capitalize_first(config.name), e);
                 println!("Warning: {} failed: {}", capitalize_first(config.name), e);
-                println!("Continuing...");
-                // Don't block on check errors
-                return Ok(true);
+                return CheckResult::Error(e);
             }
         }
     }
 
-    Ok(false)
+    // Should not reach here, but if we do, it means all iterations found issues
+    CheckResult::NeedsChanges(format!(
+        "{} still requires changes after {} fix iterations",
+        capitalize_first(config.name),
+        MAX_FIX_ITERATIONS
+    ))
 }
 
 /// Capitalize the first letter of a string.
@@ -341,39 +365,58 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
             println!();
             println!("All phases completed. Running code review...");
 
-            let review_passed = run_check_fix_loop(
+            let review_result = run_check_fix_loop(
                 &CheckConfig::REVIEW,
                 || run_review(&engine, &ctx),
                 |feedback| run_fix(&engine, &ctx, "code review", feedback),
             )
-            .await?;
+            .await;
 
-            if !review_passed {
-                state.status = FeatureStatus::Failed;
-                state.error =
-                    Some("Code review requires changes after max fix iterations".to_string());
-                state.feature.updated_at = Utc::now();
-                state.save(&feature_dir)?;
-                return Ok(());
+            match review_result {
+                CheckResult::Passed => {
+                    // Continue to verification
+                }
+                CheckResult::NeedsChanges(reason) => {
+                    state.status = FeatureStatus::Failed;
+                    state.error = Some(reason);
+                    state.feature.updated_at = Utc::now();
+                    state.save(&feature_dir)?;
+                    return Ok(());
+                }
+                CheckResult::Error(e) => {
+                    // Log the error but continue - check errors shouldn't block the pipeline
+                    warn!("Code review check encountered an error: {}", e);
+                    println!("Continuing despite code review error...");
+                }
             }
 
             // === Verification Loop ===
             println!();
             println!("Running verification...");
 
-            let verification_passed = run_check_fix_loop(
+            let verification_result = run_check_fix_loop(
                 &CheckConfig::VERIFICATION,
                 || run_verification(&engine, &ctx),
                 |feedback| run_fix(&engine, &ctx, "verification", feedback),
             )
-            .await?;
+            .await;
 
-            if !verification_passed {
-                state.status = FeatureStatus::Failed;
-                state.error = Some("Verification failed after max fix iterations".to_string());
-                state.feature.updated_at = Utc::now();
-                state.save(&feature_dir)?;
-                return Ok(());
+            match verification_result {
+                CheckResult::Passed => {
+                    // Continue to PR creation
+                }
+                CheckResult::NeedsChanges(reason) => {
+                    state.status = FeatureStatus::Failed;
+                    state.error = Some(reason);
+                    state.feature.updated_at = Utc::now();
+                    state.save(&feature_dir)?;
+                    return Ok(());
+                }
+                CheckResult::Error(e) => {
+                    // Log the error but continue - check errors shouldn't block the pipeline
+                    warn!("Verification check encountered an error: {}", e);
+                    println!("Continuing despite verification error...");
+                }
             }
 
             // Create PR if not dry run
