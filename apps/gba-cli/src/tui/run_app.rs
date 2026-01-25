@@ -391,6 +391,11 @@ impl RunApp {
             .show_cursor()
             .map_err(|e| CliError::Io(format!("failed to show cursor: {}", e)))?;
 
+        // Clear the terminal to ensure clean output after TUI
+        terminal
+            .clear()
+            .map_err(|e| CliError::Io(format!("failed to clear terminal: {}", e)))?;
+
         Ok(())
     }
 
