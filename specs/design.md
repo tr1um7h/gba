@@ -40,7 +40,7 @@ GBA 在目标仓库中创建并管理以下目录结构：
 ```
 <repo>/
 ├── .gba/                           # GBA 元数据目录
-│   ├── config.toml                 # GBA 配置文件
+│   ├── config.yml                  # GBA 项目配置文件
 │   ├── 0001_<feature-slug>/        # 功能工作区
 │   │   ├── specs/
 │   │   │   ├── design.md           # 功能设计文档
@@ -48,7 +48,7 @@ GBA 在目标仓库中创建并管理以下目录结构：
 │   │   │   └── ...
 │   │   ├── docs/
 │   │   │   └── impl_details.md     # 实现笔记
-│   │   └── state.json              # 执行状态
+│   │   └── state.yml               # 执行状态
 │   └── 0002_<feature-slug>/
 │       └── ...
 ├── .trees/                         # Git worktrees (已 gitignore)
@@ -56,6 +56,150 @@ GBA 在目标仓库中创建并管理以下目录结构：
 │   └── 0002_<feature-slug>/
 ├── .gba.md                         # 仓库 AI 文档
 └── CLAUDE.md                       # 引用 .gba.md (如存在)
+```
+
+## 配置文件
+
+### `.gba/config.yml` - 项目配置
+
+此配置文件存储项目级别的 GBA 设置，用于：
+- 覆盖默认的 agent 行为（模型、权限模式等）
+- 指定额外的提示词模板目录
+- 配置 git 行为（自动提交、分支命名）
+- 配置代码审查选项
+
+```yaml
+# .gba/config.yml
+
+# Agent 配置
+agent:
+  # 使用的 Claude 模型（可选，SDK 处理默认值）
+  # model: claude-sonnet-4-20250514
+
+  # 权限模式: auto | manual | none
+  permission_mode: auto
+
+  # 预算限制（美元，可选）
+  # budget_limit: 10.0
+
+# 提示词配置
+prompts:
+  # 额外的提示词目录（可选）
+  include:
+    - ~/.config/gba/prompts
+
+# Git 配置
+git:
+  # 每个阶段后自动提交
+  auto_commit: true
+
+  # 分支命名模式
+  # 可用变量: {id}, {slug}
+  branch_pattern: "feature/{id}-{slug}"
+
+# 代码审查配置
+review:
+  # 是否启用代码审查
+  enabled: true
+
+  # 审查提供者: codex | claude
+  provider: codex
+```
+
+### `state.yml` - 功能执行状态
+
+每个功能的执行状态存储在 `.gba/<feature-id>/state.yml` 中，用于：
+- 跟踪执行进度，支持中断后恢复
+- 记录每个阶段的执行结果和成本
+- 存储最终的 PR 链接
+
+```yaml
+# .gba/0001_add-user-auth/state.yml
+
+# 功能基本信息
+feature:
+  id: "0001"
+  slug: add-user-auth
+  created_at: "2024-01-15T10:30:00Z"
+  updated_at: "2024-01-15T14:20:00Z"
+
+# 执行状态: planned | in_progress | completed | failed
+status: in_progress
+
+# 当前执行到的阶段索引（从 0 开始）
+current_phase: 2
+
+# Git 信息
+git:
+  worktree_path: .trees/0001_add-user-auth
+  branch: feature/0001-add-user-auth
+  base_branch: main
+
+# 阶段执行记录
+phases:
+  - name: setup
+    status: completed  # pending | in_progress | completed | failed
+    started_at: "2024-01-15T10:35:00Z"
+    completed_at: "2024-01-15T10:42:00Z"
+    commit_sha: abc1234
+    # 执行统计
+    stats:
+      turns: 5
+      input_tokens: 12500
+      output_tokens: 8300
+      cost_usd: 0.15
+
+  - name: implementation
+    status: completed
+    started_at: "2024-01-15T10:45:00Z"
+    completed_at: "2024-01-15T11:30:00Z"
+    commit_sha: def5678
+    stats:
+      turns: 12
+      input_tokens: 45000
+      output_tokens: 32000
+      cost_usd: 0.58
+
+  - name: testing
+    status: in_progress
+    started_at: "2024-01-15T11:35:00Z"
+    completed_at: null
+    commit_sha: null
+    stats:
+      turns: 3
+      input_tokens: 8000
+      output_tokens: 5500
+      cost_usd: 0.10
+
+  - name: review
+    status: pending
+    started_at: null
+    completed_at: null
+    commit_sha: null
+    stats: null
+
+  - name: verification
+    status: pending
+    started_at: null
+    completed_at: null
+    commit_sha: null
+    stats: null
+
+# 总体统计
+total_stats:
+  turns: 20
+  input_tokens: 65500
+  output_tokens: 45800
+  cost_usd: 0.83
+
+# 最终结果
+result:
+  pr_url: null  # 完成后填入: https://github.com/owner/repo/pull/123
+  pr_number: null
+  merged: false
+
+# 错误信息（如果失败）
+error: null
 ```
 
 ## 命令工作流
@@ -128,16 +272,18 @@ $ gba init
 ├─────────────────────────────────────────────────────────────────────┤
 │  .gba/0001_<slug>/specs/design.md        # 设计文档                  │
 │  .gba/0001_<slug>/specs/verification.md  # 测试标准                  │
-│  .gba/0001_<slug>/state.json             # 执行状态                  │
+│  .gba/0001_<slug>/state.yml              # 执行状态                  │
 │  .trees/0001_<slug>/                     # Git worktree             │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 3. `gba run <feature-slug>` - 执行计划
 
+执行支持**断点恢复**：如果执行过程中被中断（Ctrl+C、网络问题、系统崩溃等），下次运行 `gba run` 会自动从上次中断的位置继续执行。
+
 ```
 ┌───────────────────┐     ┌─────────────────┐     ┌──────────────────┐
-│ gba run <slug>    │────▶│    加载状态      │────▶│     执行阶段      │
+│ gba run <slug>    │────▶│  加载 state.yml │────▶│  检查断点/恢复    │
 └───────────────────┘     └─────────────────┘     └────────┬─────────┘
                                                            │
                           ┌────────────────────────────────┘
@@ -155,12 +301,21 @@ $ gba init
 │  [✓] 提交 phase 2                                                  │
 │  [✓] codex review                                                  │
 │  [✓] 处理 review 结果                                               │
-│  [✓] 验证系统                                                       │
+│  [✓] verification: 验证系统                                         │
 │  [✓] 提交 PR                                                       │
 │                                                                     │
-│  执行完成！PR: https://github.com/...                               │
+│  执行完成！                                                         │
+│  PR: https://github.com/owner/repo/pull/123                        │
+│  总计: 20 turns, $0.83 USD                                         │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
+
+# 中断恢复示例
+$ gba run add-user-auth
+检测到未完成的执行，从 phase 3 (testing) 继续...
+[✓] phase 3: testing (继续)
+[✓] 提交 phase 3
+...
 ```
 
 ## Crate 规格说明
@@ -201,23 +356,6 @@ pub enum PromptError {
     RenderError(minijinja::Error),
     IoError(std::io::Error),
 }
-```
-
-**模板示例：**
-```jinja
-{# init_system.j2 #}
-你正在分析一个仓库以帮助初始化 GBA。
-
-仓库路径: {{ repo_path }}
-{% if readme_content %}
-README 内容:
-{{ readme_content }}
-{% endif %}
-
-请分析仓库结构并识别：
-1. 使用的主要编程语言
-2. 需要文档化的重要目录
-3. 构建系统和依赖项
 ```
 
 ### gba-core (核心执行引擎)
@@ -279,6 +417,7 @@ pub enum TaskKind {
     Plan,           // 规划功能
     Execute,        // 执行阶段
     Review,         // 代码审查
+    Verification,   // 验证测试
     Custom(String), // 自定义任务（模板名称）
 }
 
@@ -287,6 +426,15 @@ pub struct TaskResult {
     pub success: bool,
     pub output: String,
     pub artifacts: Vec<Artifact>,
+    pub stats: TaskStats,
+}
+
+/// 任务执行统计
+pub struct TaskStats {
+    pub turns: u32,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: f64,
 }
 
 /// 多轮对话的交互式会话
@@ -308,6 +456,9 @@ impl Session {
 
     /// 清除历史
     pub fn clear(&mut self);
+
+    /// 获取当前会话统计
+    pub fn stats(&self) -> &TaskStats;
 }
 
 /// 流式传输的事件处理 trait
@@ -367,13 +518,17 @@ pub enum Command {
         /// 要执行的功能标识
         slug: String,
 
-        /// 从特定阶段恢复
+        /// 从特定阶段恢复（覆盖自动检测）
         #[arg(long)]
         from_phase: Option<usize>,
 
         /// 试运行（不提交或推送）
         #[arg(long)]
         dry_run: bool,
+
+        /// 强制重新开始（忽略已有进度）
+        #[arg(long)]
+        restart: bool,
     },
 
     /// 列出所有功能
@@ -439,40 +594,8 @@ pub enum Command {
               │  • 显示文本                   │
               │  • 显示工具使用               │
               │  • 更新进度                   │
+              │  • 更新 state.yml            │
               └──────────────────────────────┘
-```
-
-## 状态管理
-
-功能状态持久化在 `state.json` 中：
-
-```json
-{
-  "feature_slug": "add-user-auth",
-  "feature_id": "0001",
-  "created_at": "2024-01-15T10:30:00Z",
-  "status": "in_progress",
-  "current_phase": 2,
-  "phases": [
-    {
-      "name": "setup",
-      "status": "completed",
-      "commit_sha": "abc123"
-    },
-    {
-      "name": "implementation",
-      "status": "completed",
-      "commit_sha": "def456"
-    },
-    {
-      "name": "testing",
-      "status": "in_progress",
-      "commit_sha": null
-    }
-  ],
-  "worktree_branch": "feature/0001-add-user-auth",
-  "pr_url": null
-}
 ```
 
 ## 错误处理策略
@@ -504,6 +627,398 @@ pub enum GbaError {
 }
 ```
 
+## 提示词模板
+
+所有提示词模板存放在 `crates/gba-pm/templates/` 目录下。
+
+### 模板文件结构
+
+```
+crates/gba-pm/templates/
+├── init/
+│   └── system.j2           # 初始化系统提示词
+├── plan/
+│   └── system.j2           # 规划系统提示词
+├── execute/
+│   ├── system.j2           # 执行系统提示词
+│   └── phase.j2            # 单阶段执行提示词
+├── review/
+│   └── system.j2           # 代码审查系统提示词
+└── verification/
+    └── system.j2           # 验证系统提示词
+```
+
+### 模板内容
+
+#### `init/system.j2` - 初始化系统提示词
+
+```jinja
+{# init/system.j2 - Repository initialization prompt #}
+You are a repository analyzer helping to initialize GBA (Geektime Bootcamp Agent) for a software project.
+
+## Your Task
+
+Analyze the repository at `{{ repo_path }}` and generate documentation that will help AI assistants understand and work with this codebase.
+
+## Repository Information
+
+{% if readme_content %}
+### README Content
+```
+{{ readme_content }}
+```
+{% endif %}
+
+{% if file_tree %}
+### File Structure
+```
+{{ file_tree }}
+```
+{% endif %}
+
+## Instructions
+
+1. **Analyze the repository structure** and identify:
+   - Primary programming language(s)
+   - Framework(s) and major dependencies
+   - Build system and package manager
+   - Project architecture pattern (monorepo, microservices, etc.)
+
+2. **Identify important directories** that need documentation:
+   - Source code directories
+   - Configuration directories
+   - Test directories
+   - Documentation directories
+
+3. **Generate `.gba.md`** with the following sections:
+   - Project Overview (1-2 paragraphs)
+   - Technology Stack (bullet list)
+   - Directory Structure (with descriptions)
+   - Development Setup (if determinable)
+   - Key Conventions (coding style, naming, etc.)
+
+4. **Update `CLAUDE.md`** (if it exists) to include a reference to `.gba.md`
+
+## Output Format
+
+Use the file writing tools to:
+1. Create `.gba.md` with comprehensive project documentation
+2. Update `CLAUDE.md` if it exists, otherwise create it with a reference to `.gba.md`
+3. Create `.gba/config.yml` with default configuration
+```
+
+#### `plan/system.j2` - 规划系统提示词
+
+```jinja
+{# plan/system.j2 - Feature planning prompt #}
+You are a software architect helping to plan a new feature for a software project.
+
+## Context
+
+**Repository:** {{ repo_path }}
+**Feature Slug:** {{ feature_slug }}
+**Feature ID:** {{ feature_id }}
+
+{% if gba_md_content %}
+### Project Documentation
+```
+{{ gba_md_content }}
+```
+{% endif %}
+
+{% if existing_specs %}
+### Existing Feature Specs
+{% for spec in existing_specs %}
+- {{ spec.id }}: {{ spec.slug }} ({{ spec.status }})
+{% endfor %}
+{% endif %}
+
+## Your Task
+
+Engage in a conversation with the user to understand their feature requirements and create a detailed implementation plan.
+
+## Planning Process
+
+1. **Gather Requirements**
+   - Ask clarifying questions about the feature
+   - Understand the scope and constraints
+   - Identify dependencies on existing code
+
+2. **Design the Solution**
+   - Propose an implementation approach
+   - Break down into phases (each phase should be independently committable)
+   - Identify potential risks and mitigations
+
+3. **Generate Specifications** (when user approves)
+   - Create `design.md` with:
+     - Feature overview
+     - Technical approach
+     - Phase breakdown with clear deliverables
+     - File changes per phase
+   - Create `verification.md` with:
+     - Test cases
+     - Acceptance criteria
+     - Manual verification steps
+
+4. **Setup Git Worktree**
+   - Create branch: `{{ branch_pattern | replace("{id}", feature_id) | replace("{slug}", feature_slug) }}`
+   - Initialize worktree at `.trees/{{ feature_id }}_{{ feature_slug }}`
+
+## Guidelines
+
+- Each phase should be small enough to complete in one session
+- Each phase should result in working, testable code
+- Phases should build on each other incrementally
+- Include clear commit messages for each phase
+
+## Output
+
+When the user approves the plan:
+1. Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`
+2. Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`
+3. Create `.gba/{{ feature_id }}_{{ feature_slug }}/state.yml` with status: planned
+4. Create git worktree and branch
+
+Inform the user: "Plan finished. Please call `gba run {{ feature_slug }}` to execute."
+```
+
+#### `execute/system.j2` - 执行系统提示词
+
+```jinja
+{# execute/system.j2 - Phase execution prompt #}
+You are a software developer implementing a planned feature.
+
+## Context
+
+**Repository:** {{ repo_path }}
+**Feature:** {{ feature_id }}_{{ feature_slug }}
+**Worktree:** {{ worktree_path }}
+
+{% if design_spec %}
+### Design Specification
+```markdown
+{{ design_spec }}
+```
+{% endif %}
+
+{% if verification_spec %}
+### Verification Criteria
+```markdown
+{{ verification_spec }}
+```
+{% endif %}
+
+## Execution State
+
+**Status:** {{ status }}
+**Current Phase:** {{ current_phase }} / {{ total_phases }}
+
+{% if is_resuming %}
+### ⚠️ RESUMING FROM INTERRUPTION
+
+This execution was previously interrupted. You are resuming from phase {{ current_phase }} ({{ current_phase_name }}).
+
+**Previous Progress:**
+{% for phase in completed_phases %}
+- ✓ Phase {{ loop.index }}: {{ phase.name }} (commit: {{ phase.commit_sha }})
+{% endfor %}
+- → Phase {{ current_phase }}: {{ current_phase_name }} (IN PROGRESS - resuming)
+
+**Important:**
+- Review the current state of the worktree
+- Check what was already implemented in the interrupted phase
+- Continue from where you left off, do not redo completed work
+- If unsure about the state, check git status and recent changes
+{% endif %}
+
+### Phases
+{% for phase in phases %}
+- {% if phase.status == 'completed' %}✓{% elif phase.status == 'in_progress' %}→{% else %}○{% endif %} Phase {{ loop.index }}: {{ phase.name }} {% if phase.status == 'completed' %}(commit: {{ phase.commit_sha }}){% endif %}
+{% endfor %}
+
+## Your Task
+
+Execute **Phase {{ current_phase }}: {{ current_phase_name }}**
+
+### Phase Requirements
+{{ current_phase_requirements }}
+
+## Guidelines
+
+1. **Work in the worktree directory:** `{{ worktree_path }}`
+2. **Make incremental changes** - commit frequently if the phase is large
+3. **Run tests** after making changes to ensure nothing is broken
+4. **Follow project conventions** as documented in `.gba.md`
+
+## On Completion
+
+When you finish this phase:
+1. Ensure all tests pass
+2. Commit your changes with message: `feat({{ feature_slug }}): {{ current_phase_name }}`
+3. Report completion so the next phase can begin
+
+## On Error
+
+If you encounter an error that blocks progress:
+1. Document the error clearly
+2. Suggest potential solutions
+3. The execution will be paused for user intervention
+```
+
+#### `execute/phase.j2` - 单阶段用户提示词
+
+```jinja
+{# execute/phase.j2 - Single phase execution user prompt #}
+Execute Phase {{ phase_number }}: {{ phase_name }}
+
+{% if is_resuming %}
+**Note:** This phase was interrupted. Resume from where you left off.
+Check the current state before making changes.
+{% endif %}
+
+Requirements:
+{{ phase_requirements }}
+
+Expected deliverables:
+{% for deliverable in deliverables %}
+- {{ deliverable }}
+{% endfor %}
+```
+
+#### `review/system.j2` - 代码审查系统提示词
+
+```jinja
+{# review/system.j2 - Code review prompt #}
+You are a code reviewer performing a thorough review of implemented changes.
+
+## Context
+
+**Repository:** {{ repo_path }}
+**Feature:** {{ feature_id }}_{{ feature_slug }}
+**Branch:** {{ branch_name }}
+
+### Changes to Review
+```diff
+{{ git_diff }}
+```
+
+### Design Specification
+```markdown
+{{ design_spec }}
+```
+
+### Verification Criteria
+```markdown
+{{ verification_spec }}
+```
+
+## Review Checklist
+
+1. **Correctness**
+   - Does the implementation match the design specification?
+   - Are all requirements addressed?
+   - Are edge cases handled?
+
+2. **Code Quality**
+   - Is the code readable and maintainable?
+   - Are functions/methods appropriately sized?
+   - Is there unnecessary duplication?
+
+3. **Testing**
+   - Are there adequate tests?
+   - Do tests cover edge cases?
+   - Are tests meaningful (not just for coverage)?
+
+4. **Security**
+   - Are there any security vulnerabilities?
+   - Is input validation adequate?
+   - Are secrets handled properly?
+
+5. **Performance**
+   - Are there any obvious performance issues?
+   - Are there unnecessary allocations or loops?
+
+## Output Format
+
+Provide your review in the following format:
+
+### Summary
+[Overall assessment: APPROVED / NEEDS_CHANGES / BLOCKED]
+
+### Issues Found
+[List any issues, categorized by severity: critical, major, minor, suggestion]
+
+### Recommended Changes
+[Specific changes to make, if any]
+
+If changes are needed, implement them directly.
+```
+
+#### `verification/system.j2` - 验证系统提示词
+
+```jinja
+{# verification/system.j2 - Verification prompt #}
+You are a QA engineer verifying that an implemented feature meets its acceptance criteria.
+
+## Context
+
+**Repository:** {{ repo_path }}
+**Feature:** {{ feature_id }}_{{ feature_slug }}
+**Branch:** {{ branch_name }}
+
+### Verification Criteria
+```markdown
+{{ verification_spec }}
+```
+
+### Implementation Summary
+{% for phase in completed_phases %}
+- Phase {{ loop.index }}: {{ phase.name }}
+  - Commit: {{ phase.commit_sha }}
+  - Changes: {{ phase.files_changed }} files
+{% endfor %}
+
+## Your Task
+
+1. **Run all tests**
+   ```bash
+   # Run the project's test suite
+   ```
+
+2. **Verify each acceptance criterion**
+   - Go through each criterion in the verification spec
+   - Execute the verification steps
+   - Document pass/fail for each
+
+3. **Perform integration check**
+   - Ensure the feature works with existing functionality
+   - Check for regressions
+
+4. **Final validation**
+   - Build the project
+   - Run any linters or static analysis
+   - Verify documentation is updated if needed
+
+## Output Format
+
+### Test Results
+[Summary of test execution]
+
+### Acceptance Criteria Results
+| Criterion | Status | Notes |
+|-----------|--------|-------|
+| [criterion 1] | ✓ PASS / ✗ FAIL | [notes] |
+| ... | ... | ... |
+
+### Overall Verdict
+[VERIFIED / FAILED]
+
+### Issues Found
+[List any issues that need to be addressed]
+
+If verification fails, document what needs to be fixed before the PR can be created.
+```
+
 ## 开发计划
 
 ### 第一阶段：基础设施 (gba-pm + gba-core 基础)
@@ -513,12 +1028,12 @@ pub enum GbaError {
 2. 实现基本的 `Engine` 单次任务执行
 3. 添加核心错误类型
 4. 编写模板渲染单元测试
-5. 创建初始提示词模板 (init, plan, execute)
+5. 创建所有提示词模板
 
 **交付物：**
 - 可用的提示词管理器
 - 能执行简单任务的基本引擎
-- 模板目录结构
+- 完整的模板目录结构
 
 ### 第二阶段：交互式会话 (gba-core 流式支持)
 
@@ -526,25 +1041,25 @@ pub enum GbaError {
 1. 实现多轮对话的 `Session`
 2. 添加带 `EventHandler` trait 的流式支持
 3. 实现对话历史管理
-4. 添加会话持久化（可选恢复）
+4. 添加 `TaskStats` 统计收集
 
 **交付物：**
 - 交互式会话支持
 - 流式响应
-- 事件处理基础设施
+- 执行统计
 
 ### 第三阶段：CLI 命令 (gba-cli)
 
 **任务：**
 1. 实现 `gba init` 命令
 2. 实现 `gba list` 和 `gba status` 命令
-3. 添加配置文件支持
+3. 实现 `config.yml` 和 `state.yml` 解析
 4. 实现正确的错误处理和用户反馈
 
 **交付物：**
 - 可用的 `init` 命令
 - 功能列表和状态查看
-- 配置管理
+- 配置和状态管理
 
 ### 第四阶段：TUI 规划界面
 
@@ -563,13 +1078,14 @@ pub enum GbaError {
 
 **任务：**
 1. 实现 `gba run` 命令
-2. 构建阶段执行流水线
-3. 添加自动提交支持
-4. 集成代码审查步骤
-5. 实现 PR 创建
+2. 实现断点恢复机制
+3. 构建阶段执行流水线
+4. 添加自动提交支持
+5. 集成代码审查和验证步骤
+6. 实现 PR 创建
 
 **交付物：**
-- 完整执行流水线
+- 完整执行流水线（支持恢复）
 - 自动提交
 - PR 集成
 
@@ -601,14 +1117,27 @@ gba/
 │   │       ├── session.rs        # Session 管理
 │   │       ├── task.rs           # Task 类型
 │   │       ├── event.rs          # 事件处理
+│   │       ├── stats.rs          # 统计收集
 │   │       ├── config.rs         # 配置
 │   │       └── error.rs          # 错误类型
 │   └── gba-pm/
 │       ├── Cargo.toml
-│       └── src/
-│           ├── lib.rs            # 公共导出
-│           ├── manager.rs        # PromptManager
-│           └── error.rs          # 错误类型
+│       ├── src/
+│       │   ├── lib.rs            # 公共导出
+│       │   ├── manager.rs        # PromptManager
+│       │   └── error.rs          # 错误类型
+│       └── templates/            # 提示词模板
+│           ├── init/
+│           │   └── system.j2
+│           ├── plan/
+│           │   └── system.j2
+│           ├── execute/
+│           │   ├── system.j2
+│           │   └── phase.j2
+│           ├── review/
+│           │   └── system.j2
+│           └── verification/
+│               └── system.j2
 ├── apps/
 │   └── gba-cli/
 │       ├── Cargo.toml
@@ -628,47 +1157,8 @@ gba/
 │           │   ├── chat.rs       # 聊天组件
 │           │   ├── input.rs      # 输入处理
 │           │   └── progress.rs   # 进度显示
-│           └── state.rs          # 功能状态管理
-└── prompts/                      # 默认提示词模板
-    ├── init_system.j2
-    ├── init_user.j2
-    ├── plan_system.j2
-    ├── plan_user.j2
-    ├── execute_system.j2
-    ├── execute_phase.j2
-    └── review_system.j2
-```
-
-## 配置
-
-`~/.config/gba/config.toml` 或 `.gba/config.toml`：
-
-```toml
-[agent]
-# 使用的 Claude 模型（可选，SDK 处理默认值）
-# model = "claude-sonnet-4-20250514"
-
-# 权限模式
-permission_mode = "auto"  # auto, manual, none
-
-# 预算限制（美元，可选）
-# budget_limit = 10.0
-
-[prompts]
-# 额外的提示词目录
-include = ["~/.config/gba/prompts"]
-
-[git]
-# 每个阶段后自动提交
-auto_commit = true
-
-# 分支命名模式
-branch_pattern = "feature/{id}-{slug}"
-
-[review]
-# 启用代码审查
-enabled = true
-
-# 审查提供者
-provider = "codex"  # codex, claude
+│           ├── config.rs         # config.yml 解析
+│           └── state.rs          # state.yml 管理
+└── specs/
+    └── design.md                 # 本文档
 ```
