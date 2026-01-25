@@ -524,9 +524,14 @@ impl<'a> Engine<'a> {
             options.disallowed_tools = config.disallowed_tools.clone();
         }
 
-        // Default to auto permission mode if not set
+        // Apply task-specific permission mode if configured
+        if let Some(mode) = config.permission_mode {
+            options.permission_mode = Some(mode.into());
+        }
+
+        // Default to bypass permissions if not set (for automated execution)
         if options.permission_mode.is_none() {
-            options.permission_mode = Some(PermissionMode::AcceptEdits);
+            options.permission_mode = Some(PermissionMode::BypassPermissions);
         }
 
         // Skip version check for faster execution

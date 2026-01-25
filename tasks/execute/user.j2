@@ -1,4 +1,4 @@
-Execute the implementation phases for feature `{{ feature_slug }}`.
+Execute phase {{ current_phase_index + 1 }} of {{ total_phases }}: `{{ current_phase_name }}`
 
 ## Current State
 
@@ -9,45 +9,26 @@ Read `state.yml` to check progress. Continue from where you left off - do not re
 Check `git status` and recent commits to understand current state.
 {% endif %}
 
-**Phases:**
+**All Phases:**
 {% for phase in phases %}
 - {% if phase.status == 'completed' %}[x]{% elif phase.status == 'in_progress' %}[>]{% else %}[ ]{% endif %} {{ phase.name }}{% if phase.commit_sha %} ({{ phase.commit_sha }}){% endif %}
 {% endfor %}
 
-## Tasks
+## Tasks for This Phase
 
-1. **Read design spec** to understand requirements for current phase
+1. **Read design spec** to understand requirements for `{{ current_phase_name }}`
 
-2. **Work in worktree:** `cd .trees/{{ feature_id }}_{{ feature_slug }}`
-
-3. **Implement the phase:**
+2. **Implement this phase:**
    - Follow project conventions from `.gba.md`
    - Run tests after changes
-   - Commit with: `feat({{ feature_slug }}): <phase description>`
+   - Commit with: `feat({{ feature_slug }}): {{ current_phase_name }}`
 
-4. **Update state.yml** after each phase:
-   - Set phase status to `completed`
-   - Record `commit_sha`
-   - Update `stats` (turns, cost)
+## STOP CONDITIONS
 
-5. **Repeat** until all phases complete
+Stop when you have:
+- Completed the implementation for `{{ current_phase_name }}`
+- Committed the changes
+- Verified the changes pass tests
 
-## After All Phases Complete
-
-1. **Run verification** per `verification.md`
-
-2. **Push and create PR:**
-   ```bash
-   git push -u origin feature/{{ feature_id }}-{{ feature_slug }}
-   gh pr create --base main --head feature/{{ feature_id }}-{{ feature_slug }} \
-     --title "feat({{ feature_slug }}): <description>" \
-     --body "<detailed PR description with:
-       - Summary
-       - Phase-by-phase changes
-       - Testing performed
-       - Verification checklist from verification.md>"
-   ```
-
-3. **Update state.yml** with `pr_url` and set status to `completed`
-
-4. **Report summary:** PR URL, total phases, total cost
+**DO NOT** continue to the next phase - the orchestrator will handle that.
+**DO NOT** create PRs or push to remote - the orchestrator will handle that after all phases complete.

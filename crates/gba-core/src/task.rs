@@ -25,6 +25,8 @@ pub enum TaskKind {
     Review,
     /// Verify that implementations meet specifications.
     Verification,
+    /// Fix issues identified in review or verification.
+    Fix,
     /// Custom task with a user-defined name.
     Custom(String),
 }
@@ -42,6 +44,7 @@ impl TaskKind {
             Self::Execute => "execute",
             Self::Review => "review",
             Self::Verification => "verification",
+            Self::Fix => "fix",
             Self::Custom(name) => name.as_str(),
         }
     }
@@ -167,6 +170,7 @@ mod tests {
         assert_eq!(TaskKind::Execute.dir_name(), "execute");
         assert_eq!(TaskKind::Review.dir_name(), "review");
         assert_eq!(TaskKind::Verification.dir_name(), "verification");
+        assert_eq!(TaskKind::Fix.dir_name(), "fix");
         assert_eq!(
             TaskKind::Custom("my_task".to_string()).dir_name(),
             "my_task"

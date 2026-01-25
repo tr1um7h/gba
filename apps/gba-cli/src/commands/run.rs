@@ -149,69 +149,161 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
 
     match result {
         Ok(()) => {
-            // All phases completed, run review and verification
+            // All phases completed, run review and verification with fix loops
+            const MAX_FIX_ITERATIONS: u32 = 3;
+
+            // === Code Review Loop ===
             println!();
             println!("All phases completed. Running code review...");
 
-            // Run code review
-            let review_result = run_review(&engine, &state).await;
-            match review_result {
-                Ok(review_output) => {
-                    println!();
-                    println!("=== Code Review Result ===");
-                    println!("{}", review_output);
-
-                    // Check if review passed
-                    if review_output.contains("APPROVED") {
+            let mut review_passed = false;
+            for iteration in 1..=MAX_FIX_ITERATIONS {
+                let review_result = run_review(&engine, workdir, &state).await;
+                match review_result {
+                    Ok(review_output) => {
                         println!();
-                        println!("Code review: APPROVED");
-                    } else if review_output.contains("NEEDS_CHANGES") {
-                        println!();
-                        println!("Code review: NEEDS_CHANGES");
-                        println!("Please address the review feedback and run again.");
+                        println!(
+                            "=== Code Review Result (iteration {}/{}) ===",
+                            iteration, MAX_FIX_ITERATIONS
+                        );
+                        println!("{}", review_output);
 
-                        state.status = FeatureStatus::Failed;
-                        state.error = Some("Code review requires changes".to_string());
-                        state.feature.updated_at = Utc::now();
-                        state.save(&feature_dir)?;
-                        return Ok(());
+                        if review_output.contains("APPROVED") {
+                            println!();
+                            println!("Code review: APPROVED");
+                            review_passed = true;
+                            break;
+                        } else if review_output.contains("NEEDS_CHANGES") {
+                            println!();
+                            println!("Code review: NEEDS_CHANGES");
+
+                            if iteration < MAX_FIX_ITERATIONS {
+                                println!(
+                                    "Attempting to fix issues (iteration {}/{})...",
+                                    iteration, MAX_FIX_ITERATIONS
+                                );
+
+                                match run_fix(
+                                    &engine,
+                                    workdir,
+                                    &state,
+                                    "code review",
+                                    &review_output,
+                                )
+                                .await
+                                {
+                                    Ok(fix_output) => {
+                                        println!();
+                                        println!("=== Fix Result ===");
+                                        println!("{}", fix_output);
+                                    }
+                                    Err(e) => {
+                                        warn!("Fix attempt failed: {}", e);
+                                        println!("Warning: Fix attempt failed: {}", e);
+                                    }
+                                }
+                            } else {
+                                println!(
+                                    "Max fix iterations reached. Review still requires changes."
+                                );
+                            }
+                        } else {
+                            // No clear verdict, treat as passed
+                            println!();
+                            println!("Code review: No blocking issues found");
+                            review_passed = true;
+                            break;
+                        }
                     }
-                }
-                Err(e) => {
-                    warn!("Code review failed: {}", e);
-                    println!("Warning: Code review failed: {}", e);
-                    println!("Continuing with verification...");
+                    Err(e) => {
+                        warn!("Code review failed: {}", e);
+                        println!("Warning: Code review failed: {}", e);
+                        println!("Continuing with verification...");
+                        review_passed = true; // Don't block on review errors
+                        break;
+                    }
                 }
             }
 
-            // Run verification
+            if !review_passed {
+                state.status = FeatureStatus::Failed;
+                state.error =
+                    Some("Code review requires changes after max fix iterations".to_string());
+                state.feature.updated_at = Utc::now();
+                state.save(&feature_dir)?;
+                return Ok(());
+            }
+
+            // === Verification Loop ===
             println!();
             println!("Running verification...");
 
-            let verify_result = run_verification(&engine, &state).await;
-            match verify_result {
-                Ok(verify_output) => {
-                    println!();
-                    println!("=== Verification Result ===");
-                    println!("{}", verify_output);
-
-                    if verify_output.contains("FAILED") {
+            let mut verification_passed = false;
+            for iteration in 1..=MAX_FIX_ITERATIONS {
+                let verify_result = run_verification(&engine, workdir, &state).await;
+                match verify_result {
+                    Ok(verify_output) => {
                         println!();
-                        println!("Verification: FAILED");
-                        state.status = FeatureStatus::Failed;
-                        state.error = Some("Verification failed".to_string());
-                        state.feature.updated_at = Utc::now();
-                        state.save(&feature_dir)?;
-                        return Ok(());
-                    }
+                        println!(
+                            "=== Verification Result (iteration {}/{}) ===",
+                            iteration, MAX_FIX_ITERATIONS
+                        );
+                        println!("{}", verify_output);
 
-                    println!();
-                    println!("Verification: PASSED");
+                        if verify_output.contains("VERIFIED") || !verify_output.contains("FAILED") {
+                            println!();
+                            println!("Verification: PASSED");
+                            verification_passed = true;
+                            break;
+                        } else if verify_output.contains("FAILED") {
+                            println!();
+                            println!("Verification: FAILED");
+
+                            if iteration < MAX_FIX_ITERATIONS {
+                                println!(
+                                    "Attempting to fix issues (iteration {}/{})...",
+                                    iteration, MAX_FIX_ITERATIONS
+                                );
+
+                                match run_fix(
+                                    &engine,
+                                    workdir,
+                                    &state,
+                                    "verification",
+                                    &verify_output,
+                                )
+                                .await
+                                {
+                                    Ok(fix_output) => {
+                                        println!();
+                                        println!("=== Fix Result ===");
+                                        println!("{}", fix_output);
+                                    }
+                                    Err(e) => {
+                                        warn!("Fix attempt failed: {}", e);
+                                        println!("Warning: Fix attempt failed: {}", e);
+                                    }
+                                }
+                            } else {
+                                println!("Max fix iterations reached. Verification still failing.");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Verification failed: {}", e);
+                        println!("Warning: Verification failed: {}", e);
+                        verification_passed = true; // Don't block on verification errors
+                        break;
+                    }
                 }
-                Err(e) => {
-                    warn!("Verification failed: {}", e);
-                    println!("Warning: Verification failed: {}", e);
-                }
+            }
+
+            if !verification_passed {
+                state.status = FeatureStatus::Failed;
+                state.error = Some("Verification failed after max fix iterations".to_string());
+                state.feature.updated_at = Utc::now();
+                state.save(&feature_dir)?;
+                return Ok(());
             }
 
             // Create PR if not dry run
@@ -352,6 +444,9 @@ async fn execute_phases(
             "feature_id": state.feature.id,
             "feature_slug": state.feature.slug,
             "is_resuming": is_resuming && phase_idx == start_phase,
+            "current_phase_index": phase_idx,
+            "current_phase_name": phase_name,
+            "total_phases": total_phases,
             "phases": phases_context,
         });
 
@@ -424,8 +519,14 @@ fn get_latest_commit_sha(workdir: &Path, state: &FeatureState) -> Result<Option<
 }
 
 /// Run code review.
-async fn run_review(engine: &Engine<'_>, state: &FeatureState) -> Result<String, CliError> {
+async fn run_review(
+    engine: &Engine<'_>,
+    workdir: &Path,
+    state: &FeatureState,
+) -> Result<String, CliError> {
+    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
     let context = json!({
+        "repo_path": worktree_path.display().to_string(),
         "feature_id": state.feature.id,
         "feature_slug": state.feature.slug,
     });
@@ -437,13 +538,42 @@ async fn run_review(engine: &Engine<'_>, state: &FeatureState) -> Result<String,
 }
 
 /// Run verification.
-async fn run_verification(engine: &Engine<'_>, state: &FeatureState) -> Result<String, CliError> {
+async fn run_verification(
+    engine: &Engine<'_>,
+    workdir: &Path,
+    state: &FeatureState,
+) -> Result<String, CliError> {
+    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
     let context = json!({
+        "repo_path": worktree_path.display().to_string(),
         "feature_id": state.feature.id,
         "feature_slug": state.feature.slug,
     });
 
     let task = Task::new(TaskKind::Verification, context);
+    let result = engine.run(task).await?;
+
+    Ok(result.output)
+}
+
+/// Run fix task to address review or verification issues.
+async fn run_fix(
+    engine: &Engine<'_>,
+    workdir: &Path,
+    state: &FeatureState,
+    fix_type: &str,
+    feedback: &str,
+) -> Result<String, CliError> {
+    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
+    let context = json!({
+        "repo_path": worktree_path.display().to_string(),
+        "feature_id": state.feature.id,
+        "feature_slug": state.feature.slug,
+        "fix_type": fix_type,
+        "feedback": feedback,
+    });
+
+    let task = Task::new(TaskKind::Fix, context);
     let result = engine.run(task).await?;
 
     Ok(result.output)

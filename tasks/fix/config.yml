@@ -1,0 +1,6 @@
+# GBA Fix Task Configuration
+# Used to fix issues identified in code review or verification
+preset: true
+tools: []              # empty = all tools allowed
+disallowedTools: []    # needs full access to fix issues
+permissionMode: bypass_permissions

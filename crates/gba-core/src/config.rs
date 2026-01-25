@@ -5,10 +5,35 @@
 
 use std::path::PathBuf;
 
+use claude_agent_sdk_rs::PermissionMode;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use gba_pm::PromptManager;
+
+/// Permission mode for task execution.
+///
+/// This wraps the SDK's `PermissionMode` to allow deserialization from YAML.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskPermissionMode {
+    /// Accept edits but prompt for other operations.
+    AcceptEdits,
+    /// Bypass all permission prompts.
+    BypassPermissions,
+    /// Default behavior (prompt for all operations).
+    Default,
+}
+
+impl From<TaskPermissionMode> for PermissionMode {
+    fn from(mode: TaskPermissionMode) -> Self {
+        match mode {
+            TaskPermissionMode::AcceptEdits => PermissionMode::AcceptEdits,
+            TaskPermissionMode::BypassPermissions => PermissionMode::BypassPermissions,
+            TaskPermissionMode::Default => PermissionMode::Default,
+        }
+    }
+}
 
 /// Task configuration loaded from `tasks/<kind>/config.yml`.
 ///
@@ -23,6 +48,7 @@ use gba_pm::PromptManager;
 /// disallowedTools:
 ///   - Write
 ///   - Edit
+/// permissionMode: bypass_permissions
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +72,13 @@ pub struct TaskConfig {
     /// An empty list means no tools are explicitly disallowed.
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
+
+    /// Permission mode for this task.
+    ///
+    /// Controls how the agent handles permission prompts.
+    /// Defaults to `bypass_permissions` for automated execution.
+    #[serde(default)]
+    pub permission_mode: Option<TaskPermissionMode>,
 }
 
 /// Engine configuration for creating an [`Engine`](crate::Engine) instance.
@@ -91,6 +124,22 @@ mod tests {
         assert!(config.preset);
         assert!(config.tools.is_empty());
         assert!(config.disallowed_tools.is_empty());
+        assert!(config.permission_mode.is_none());
+    }
+
+    #[test]
+    fn test_should_deserialize_task_config_with_permission_mode() {
+        let yaml = r#"
+preset: true
+permissionMode: bypass_permissions
+"#;
+        let config: TaskConfig = serde_yaml::from_str(yaml).unwrap();
+
+        assert!(config.preset);
+        assert_eq!(
+            config.permission_mode,
+            Some(TaskPermissionMode::BypassPermissions)
+        );
     }
 
     #[test]

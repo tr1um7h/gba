@@ -32,8 +32,10 @@ mod app;
 mod chat;
 mod input;
 mod progress;
+mod run_app;
 
 pub use app::App;
 pub use chat::ChatWidget;
 pub use input::{InputAction, InputHandler};
 pub use progress::{PhaseDisplayStatus, PhaseInfo, ProgressState, ProgressWidget};
+pub use run_app::{RunApp, RunMessage, TuiEventHandler};
