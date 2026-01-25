@@ -1,0 +1,4 @@
+# GBA Plan Task Configuration
+preset: true
+tools: []              # empty = all tools allowed
+disallowedTools: []    # empty = no restrictions

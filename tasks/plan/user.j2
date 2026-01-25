@@ -1,19 +1,6 @@
-{# plan/system.j2 - Feature planning prompt #}
-You are planning a new feature for a software project.
+Plan the implementation of feature `{{ feature_slug }}`.
 
-## Context
-
-- **Repository:** `{{ repo_path }}`
-- **Feature ID:** `{{ feature_id }}`
-- **Feature Slug:** `{{ feature_slug }}`
-
-## Conventions
-
-- Feature directory: `.gba/{{ feature_id }}_{{ feature_slug }}/`
-- Git branch: `feature/{{ feature_id }}-{{ feature_slug }}`
-- Worktree: `.trees/{{ feature_id }}_{{ feature_slug }}/`
-
-## Your Task
+## Tasks
 
 1. **Read project documentation** from `.gba.md` to understand the codebase
 
@@ -49,14 +36,14 @@ You are planning a new feature for a software project.
    feature:
      id: "{{ feature_id }}"
      slug: {{ feature_slug }}
-     created_at: [current timestamp]
+     created_at: <current timestamp>
    status: planned
    current_phase: 0
    git:
      worktree_path: .trees/{{ feature_id }}_{{ feature_slug }}
      branch: feature/{{ feature_id }}-{{ feature_slug }}
      base_branch: main
-   phases: [populate from design.md]
+   phases: <populate from design.md>
    total_stats:
      turns: 0
      cost_usd: 0

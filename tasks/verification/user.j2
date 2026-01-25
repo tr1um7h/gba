@@ -1,18 +1,6 @@
-{# verification/system.j2 - Verification prompt #}
-You are verifying that an implemented feature meets acceptance criteria.
+Verify the implementation for feature `{{ feature_slug }}`.
 
-## Context
-
-- **Repository:** `{{ repo_path }}`
-- **Feature:** `{{ feature_id }}_{{ feature_slug }}`
-- **Branch:** `feature/{{ feature_id }}-{{ feature_slug }}`
-
-## File Locations
-
-- Verification spec: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`
-- State: `.gba/{{ feature_id }}_{{ feature_slug }}/state.yml`
-
-## Your Task
+## Tasks
 
 1. **Read verification.md** for acceptance criteria
 
@@ -39,7 +27,7 @@ You are verifying that an implemented feature meets acceptance criteria.
 ## Output
 
 ### Test Results
-[Summary]
+[Summary of test execution]
 
 ### Acceptance Criteria
 | Criterion | Status | Notes |

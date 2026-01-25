@@ -1,18 +1,4 @@
-{# execute/system.j2 - Phase execution prompt #}
-You are implementing a planned feature.
-
-## Context
-
-- **Repository:** `{{ repo_path }}`
-- **Feature:** `{{ feature_id }}_{{ feature_slug }}`
-- **Worktree:** `.trees/{{ feature_id }}_{{ feature_slug }}`
-- **Branch:** `feature/{{ feature_id }}-{{ feature_slug }}`
-
-## File Locations
-
-- Design spec: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`
-- Verification: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`
-- State: `.gba/{{ feature_id }}_{{ feature_slug }}/state.yml`
+Execute the implementation phases for feature `{{ feature_slug }}`.
 
 ## Current State
 
@@ -28,7 +14,7 @@ Check `git status` and recent commits to understand current state.
 - {% if phase.status == 'completed' %}[x]{% elif phase.status == 'in_progress' %}[>]{% else %}[ ]{% endif %} {{ phase.name }}{% if phase.commit_sha %} ({{ phase.commit_sha }}){% endif %}
 {% endfor %}
 
-## Your Task
+## Tasks
 
 1. **Read design spec** to understand requirements for current phase
 

@@ -627,35 +627,91 @@ pub enum GbaError {
 }
 ```
 
-## 提示词模板
+## 任务定义
 
-所有提示词模板存放在 `crates/gba-pm/templates/` 目录下，使用 MiniJinja 语法。
+任务定义存放在根目录 `tasks/` 下，每个任务包含配置和提示词模板。
 
 遵循 **Convention over Configuration** 原则，模板变量最小化，AI 自行读取所需文件。
 
 ```
-crates/gba-pm/templates/
+tasks/
 ├── init/
-│   └── system.j2           # 初始化系统提示词
+│   ├── config.yml          # 任务配置（preset、工具限制）
+│   ├── system.j2           # 系统提示词（追加到 claude_code preset）
+│   └── user.j2             # 用户提示词（具体任务指令）
 ├── plan/
-│   └── system.j2           # 规划系统提示词
+│   ├── config.yml
+│   ├── system.j2
+│   └── user.j2
 ├── execute/
-│   └── system.j2           # 执行系统提示词（含断点恢复逻辑）
+│   ├── config.yml
+│   ├── system.j2
+│   └── user.j2
 ├── review/
-│   └── system.j2           # 代码审查系统提示词
+│   ├── config.yml          # 禁用 Write/Edit 工具（只读审查）
+│   ├── system.j2
+│   └── user.j2
 └── verification/
-    └── system.j2           # 验证系统提示词
+    ├── config.yml
+    ├── system.j2
+    └── user.j2
+```
+
+### 任务配置 config.yml
+
+```yaml
+# tasks/<task>/config.yml
+preset: true                # true: 使用 claude_code preset，false: 自定义 system prompt
+tools: []                   # 允许的工具（空数组 = 全部允许）
+disallowedTools: []         # 禁止的工具（空数组 = 无限制）
+```
+
+**各任务配置：**
+
+| 任务 | preset | tools | disallowedTools | 说明 |
+|------|--------|-------|-----------------|------|
+| init | true | [] | [] | 完整工具集 |
+| plan | true | [] | [] | 完整工具集 |
+| execute | true | [] | [] | 完整工具集 |
+| review | true | [] | [Write, Edit, NotebookEdit] | **只读审查** |
+| verification | true | [] | [] | 需要运行测试 |
+
+### Engine 调用方式
+
+```rust
+// 根据 config.yml 的 preset 值选择不同的 SystemPrompt
+let system_prompt = if config.preset {
+    // 使用 claude_code preset，system.j2 作为 append
+    SystemPrompt::Preset(SystemPromptPreset::with_append(
+        "claude_code",
+        &rendered_system,  // system.j2 渲染结果
+    ))
+} else {
+    // 自定义 system prompt
+    SystemPrompt::Text(rendered_system)
+};
+
+let options = ClaudeAgentOptions {
+    system_prompt: Some(system_prompt),
+    tools: if config.tools.is_empty() { None } else { Some(config.tools) },
+    disallowed_tools: if config.disallowed_tools.is_empty() { None } else { Some(config.disallowed_tools) },
+    ..Default::default()
+};
+// Note: Rust struct fields use snake_case, YAML uses camelCase via serde rename_all
+
+// user.j2 作为用户消息发送
+agent.run(&rendered_user).await
 ```
 
 ### 模板上下文变量
 
-| 模板 | 必需变量 | 说明 |
+| 任务 | 必需变量 | 说明 |
 |------|----------|------|
-| `init/system.j2` | `repo_path` | 仓库路径 |
-| `plan/system.j2` | `repo_path`, `feature_id`, `feature_slug` | 规划新功能 |
-| `execute/system.j2` | `repo_path`, `feature_id`, `feature_slug`, `is_resuming`, `phases` | 执行阶段 |
-| `review/system.j2` | `repo_path`, `feature_id`, `feature_slug` | 代码审查 |
-| `verification/system.j2` | `repo_path`, `feature_id`, `feature_slug` | 验证测试 |
+| init | `repo_path` | 仓库路径 |
+| plan | `repo_path`, `feature_id`, `feature_slug` | 规划新功能 |
+| execute | `repo_path`, `feature_id`, `feature_slug`, `is_resuming`, `phases` | 执行阶段 |
+| review | `repo_path`, `feature_id`, `feature_slug` | 代码审查 |
+| verification | `repo_path`, `feature_id`, `feature_slug` | 验证测试 |
 
 ### 约定路径（无需作为变量传入）
 
@@ -755,6 +811,27 @@ crates/gba-pm/templates/
 ```
 gba/
 ├── Cargo.toml                    # Workspace 定义
+├── tasks/                        # 任务定义（配置 + 模板）
+│   ├── init/
+│   │   ├── config.yml            # 任务配置
+│   │   ├── system.j2             # 系统提示词
+│   │   └── user.j2               # 用户提示词
+│   ├── plan/
+│   │   ├── config.yml
+│   │   ├── system.j2
+│   │   └── user.j2
+│   ├── execute/
+│   │   ├── config.yml
+│   │   ├── system.j2
+│   │   └── user.j2
+│   ├── review/
+│   │   ├── config.yml
+│   │   ├── system.j2
+│   │   └── user.j2
+│   └── verification/
+│       ├── config.yml
+│       ├── system.j2
+│       └── user.j2
 ├── crates/
 │   ├── gba-core/
 │   │   ├── Cargo.toml
@@ -765,25 +842,14 @@ gba/
 │   │       ├── task.rs           # Task 类型
 │   │       ├── event.rs          # 事件处理
 │   │       ├── stats.rs          # 统计收集
-│   │       ├── config.rs         # 配置
+│   │       ├── config.rs         # 配置（含 TaskConfig）
 │   │       └── error.rs          # 错误类型
 │   └── gba-pm/
 │       ├── Cargo.toml
-│       ├── src/
-│       │   ├── lib.rs            # 公共导出
-│       │   ├── manager.rs        # PromptManager
-│       │   └── error.rs          # 错误类型
-│       └── templates/            # 提示词模板
-│           ├── init/
-│           │   └── system.j2
-│           ├── plan/
-│           │   └── system.j2
-│           ├── execute/
-│           │   └── system.j2
-│           ├── review/
-│           │   └── system.j2
-│           └── verification/
-│               └── system.j2
+│       └── src/
+│           ├── lib.rs            # 公共导出
+│           ├── manager.rs        # PromptManager（纯模板渲染）
+│           └── error.rs          # 错误类型
 ├── apps/
 │   └── gba-cli/
 │       ├── Cargo.toml

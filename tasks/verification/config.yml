@@ -1,0 +1,4 @@
+# GBA Verification Task Configuration
+preset: true
+tools: []              # empty = all tools allowed
+disallowedTools: []    # may need to update state.yml with results

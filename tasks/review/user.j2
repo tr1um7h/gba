@@ -1,18 +1,6 @@
-{# review/system.j2 - Code review prompt #}
-You are reviewing implemented changes for a feature.
+Review the implementation for feature `{{ feature_slug }}`.
 
-## Context
-
-- **Repository:** `{{ repo_path }}`
-- **Feature:** `{{ feature_id }}_{{ feature_slug }}`
-- **Branch:** `feature/{{ feature_id }}-{{ feature_slug }}`
-
-## File Locations
-
-- Design spec: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`
-- Verification: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`
-
-## Your Task
+## Tasks
 
 1. **Get the diff:**
    ```bash
@@ -47,9 +35,21 @@ You are reviewing implemented changes for a feature.
    - No obvious issues?
    - No unnecessary allocations?
 
-4. **Output your assessment:**
-   - Summary: `APPROVED` / `NEEDS_CHANGES` / `BLOCKED`
-   - Issues found (critical/major/minor/suggestion)
-   - Recommended changes
+## Output
 
-5. **If changes needed**, implement them directly
+Provide your assessment:
+
+### Summary
+`APPROVED` / `NEEDS_CHANGES` / `BLOCKED`
+
+### Issues Found
+List issues by severity:
+- **Critical:** Must fix before merge
+- **Major:** Should fix before merge
+- **Minor:** Nice to have
+- **Suggestion:** Consider for future
+
+### Recommended Changes
+Specific code changes needed (provide diffs or code snippets).
+
+Note: You cannot modify files directly. Document changes for the developer to implement.

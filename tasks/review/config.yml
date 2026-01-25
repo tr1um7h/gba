@@ -1,0 +1,8 @@
+# GBA Review Task Configuration
+# Review is READ-ONLY - reviewer should not modify code directly
+preset: true
+tools: []              # empty = all tools allowed
+disallowedTools:       # prohibit file modifications
+  - Write
+  - Edit
+  - NotebookEdit
