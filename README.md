@@ -61,12 +61,13 @@ Opens an interactive TUI where you can:
 gba run add-user-auth
 ```
 
-GBA will:
-1. Execute each phase from the design spec
-2. Commit changes after each phase
-3. Run code review
-4. Verify against acceptance criteria
-5. Create a pull request
+GBA executes a sophisticated pipeline with TUI progress display:
+
+1. **Phase Execution** - Execute each phase from the design spec with real-time progress
+2. **Auto-Commit** - Commit changes after each phase completes
+3. **Code Review Loop** - AI-powered code review with up to 3 fix iterations
+4. **Verification Loop** - Verify against acceptance criteria with up to 3 fix iterations
+5. **PR Creation** - Generate detailed PR description using LLM
 
 ### 4. Check Status
 
@@ -130,6 +131,27 @@ Show detailed status for a feature.
 gba status my-feature
 ```
 
+### `gba clean`
+
+Clean up worktrees for merged or closed PRs.
+
+```bash
+# Preview what would be cleaned
+gba clean --dry-run
+
+# Clean worktrees for merged PRs only
+gba clean
+
+# Also clean closed (not merged) PRs
+gba clean --force
+```
+
+The clean command:
+- Scans `.trees/` for worktrees with associated PRs
+- Removes worktrees and branches for merged PRs
+- Preserves `.gba/<feature>/` directory for feature history
+- With `--force`, also removes worktrees for closed (not merged) PRs
+
 ## Configuration
 
 ### Project Configuration (`.gba/config.yml`)
@@ -137,8 +159,9 @@ gba status my-feature
 ```yaml
 # Agent configuration
 agent:
-  permission_mode: auto  # auto | manual | none
-  # budget_limit: 10.0   # Optional cost limit in USD
+  # model: claude-sonnet-4-20250514  # Optional: Claude model to use
+  permission_mode: auto               # auto | manual | none
+  # budget_limit: 10.0                # Optional: cost limit in USD
 
 # Prompt configuration
 prompts:
@@ -147,16 +170,27 @@ prompts:
 
 # Git configuration
 git:
-  auto_commit: true
+  auto_commit: true                   # Commit after each phase (default: true)
   branch_pattern: "feature/{id}-{slug}"
 
 # Review configuration
 review:
-  enabled: true
-  provider: codex  # codex | claude
+  enabled: true                       # Enable code review (default: true)
+  provider: codex                     # codex | claude
 ```
 
-### Feature State (`.gba/<id>_<slug>/state.yml`)
+| Option | Description | Default |
+|--------|-------------|---------|
+| `agent.model` | Claude model to use | SDK default |
+| `agent.permission_mode` | Permission handling: `auto`, `manual`, `none` | `auto` |
+| `agent.budget_limit` | Cost limit in USD | None |
+| `prompts.include` | Additional prompt template directories | `[]` |
+| `git.auto_commit` | Auto-commit after each phase | `true` |
+| `git.branch_pattern` | Branch naming pattern | `feature/{id}-{slug}` |
+| `review.enabled` | Enable code review before PR | `true` |
+| `review.provider` | Review provider: `codex`, `claude` | `codex` |
+
+### Feature State (`.gba/<slug>/state.yml`)
 
 Tracks execution progress including:
 - Phase completion status
@@ -170,15 +204,17 @@ Tracks execution progress including:
 your-project/
 ├── .gba/                           # GBA metadata
 │   ├── config.yml                  # Project configuration
-│   └── 0001_my-feature/            # Feature workspace
+│   └── my-feature/                 # Feature workspace (by slug)
 │       ├── specs/
 │       │   ├── design.md           # Design document
 │       │   └── verification.md     # Acceptance criteria
 │       └── state.yml               # Execution state
 ├── .trees/                         # Git worktrees (gitignored)
-│   └── 0001_my-feature/            # Feature branch worktree
+│   └── my-feature/                 # Feature branch worktree (by slug)
 └── .gba.md                         # Repository AI documentation
 ```
+
+Note: Feature directories use the slug (e.g., `my-feature`), while branch names include the ID (e.g., `feature/0001-my-feature`).
 
 ## Architecture
 
@@ -187,6 +223,66 @@ GBA consists of three main crates:
 - **gba-cli**: Command-line interface with TUI support
 - **gba-core**: Execution engine using Claude Agent SDK
 - **gba-pm**: Prompt template management with MiniJinja
+
+### Task Types
+
+The engine supports the following task types:
+
+| Task | Description |
+|------|-------------|
+| `Init` | Repository initialization for GBA |
+| `Plan` | Interactive feature planning through TUI chat |
+| `Execute` | Phase execution with code changes |
+| `Review` | Code review (read-only analysis) |
+| `Verification` | Verify implementations against acceptance criteria |
+| `Fix` | Fix issues identified in review or verification |
+| `Pr` | Generate PR description using LLM |
+| `Custom` | User-defined tasks with custom prompts |
+
+Each task type has corresponding templates in the `tasks/` directory.
+
+### Execution Pipeline
+
+When running `gba run`, the engine follows this pipeline:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        Phase Execution                           │
+│  ┌─────────┐   ┌─────────┐   ┌─────────┐                        │
+│  │ Phase 1 │ → │ Phase 2 │ → │ Phase N │ → ...                  │
+│  └────┬────┘   └────┬────┘   └────┬────┘                        │
+│       ↓             ↓             ↓                              │
+│   [Commit]      [Commit]      [Commit]                          │
+└──────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────┐
+│                    Review & Fix Loop (max 3x)                    │
+│  ┌────────┐   ┌─────────────┐   ┌─────┐                         │
+│  │ Review │ → │ Issues? ────│─→ │ Fix │ ───────────┐            │
+│  └────────┘   └──────┬──────┘   └──┬──┘            │            │
+│                   No ↓             └───────────────┘            │
+└──────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────┐
+│                 Verification & Fix Loop (max 3x)                 │
+│  ┌────────────┐   ┌─────────────┐   ┌─────┐                     │
+│  │ Verify vs  │ → │ Failed? ────│─→ │ Fix │ ───────────┐        │
+│  │ Criteria   │   └──────┬──────┘   └──┬──┘            │        │
+│  └────────────┘       No ↓             └───────────────┘        │
+└──────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────┐
+│                       PR Creation                                │
+│  Generate detailed PR description using LLM                      │
+│  Create PR via GitHub CLI                                        │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+Key features:
+- **TUI Progress Display**: Real-time progress visualization during execution
+- **Automatic Checkpointing**: Resume from interruptions with `--from-phase`
+- **Check-Fix Loops**: Up to 3 iterations to fix review/verification issues
+- **LLM-Powered PR**: Generates detailed PR descriptions from commit history
 
 ## Development
 
