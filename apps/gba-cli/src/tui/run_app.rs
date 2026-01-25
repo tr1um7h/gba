@@ -209,6 +209,16 @@ impl RunApp {
         match msg {
             RunMessage::Text(text) => {
                 self.streaming_content.push_str(&text);
+                // Update activity with first line of latest text (truncated for display)
+                let first_line = text.lines().next().unwrap_or(&text);
+                let display_text = if first_line.len() > 60 {
+                    format!("{}...", &first_line[..57])
+                } else {
+                    first_line.to_string()
+                };
+                if !display_text.trim().is_empty() {
+                    self.activity = display_text;
+                }
                 self.auto_scroll();
             }
             RunMessage::PhaseStarted { index, name } => {
@@ -532,7 +542,13 @@ impl TuiEventHandler {
 
 impl EventHandler for TuiEventHandler {
     fn on_text(&mut self, text: &str) {
-        let _ = self.tx.try_send(RunMessage::Text(text.to_string()));
+        // Ensure text ends with newline for readability
+        let text = if text.ends_with('\n') {
+            text.to_string()
+        } else {
+            format!("{text}\n")
+        };
+        let _ = self.tx.try_send(RunMessage::Text(text));
     }
 
     fn on_tool_use(&mut self, tool: &str, _input: &serde_json::Value) {

@@ -800,8 +800,14 @@ impl ChannelEventHandler {
 
 impl gba_core::event::EventHandler for ChannelEventHandler {
     fn on_text(&mut self, text: &str) {
+        // Ensure text ends with newline for readability
+        let text = if text.ends_with('\n') {
+            text.to_string()
+        } else {
+            format!("{text}\n")
+        };
         // Use try_send to avoid blocking
-        let _ = self.tx.try_send(WorkerMessage::Text(text.to_string()));
+        let _ = self.tx.try_send(WorkerMessage::Text(text));
     }
 
     fn on_tool_use(&mut self, tool: &str, _input: &serde_json::Value) {

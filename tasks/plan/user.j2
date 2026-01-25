@@ -1,24 +1,19 @@
 Plan the feature `{{ feature_slug }}`.
 
-## Step 1: Setup Worktree (DO THIS FIRST)
+## Setup (Already Done)
 
-Create the git worktree for this feature:
-
-```bash
-git worktree add .trees/{{ feature_slug }} -b feature/{{ feature_id }}-{{ feature_slug }}
-```
-
-This creates:
+The system has already created:
 - Branch: `feature/{{ feature_id }}-{{ feature_slug }}`
 - Worktree: `.trees/{{ feature_slug }}/`
+- Specs directory: `.gba/{{ feature_slug }}/specs/`
 
-## Step 2: Understand & Discuss
+## Step 1: Understand & Discuss
 
 1. Read `.gba.md` to understand the project
 2. Ask user what they want for this feature
 3. Clarify requirements through conversation
 
-## Step 3: Propose Design IN CHAT (Approval #1 Required)
+## Step 2: Propose Design IN CHAT (Approval Required)
 
 Write a SHORT design summary **directly in chat** (NOT a file):
 
@@ -37,34 +32,46 @@ Write a SHORT design summary **directly in chat** (NOT a file):
 Does this look right? Say "approved" to proceed.
 ```
 
-⚠️ **STOP HERE and wait for user to say "approved" before continuing.**
+**STOP HERE and wait for user to say "approved" before continuing.**
 
-## Step 4: Generate Spec Files (After First Approval)
+## Step 3: Create Spec Files (After Approval)
 
 ONLY after user says "approved", create spec files:
 
-1. Create `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/design.md`:
-   - Feature overview and goals
-   - Technical approach
-   - Phase breakdown with deliverables
-   - Files to modify per phase
+1. Create `.gba/{{ feature_slug }}/specs/design.md` with these sections:
+   - **Overview**: Feature goals and scope
+   - **Technical Approach**: How to implement
+   - **Phases**: List of implementation phases (REQUIRED format below)
+   - **Files**: Files to modify per phase
 
-2. Create `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/verification.md`:
+   **IMPORTANT**: The `## Phases` section MUST use this exact format:
+   ```markdown
+   ## Phases
+
+   - phase-name: Brief description of what this phase does
+   - another-phase: Brief description
+   ```
+
+   **Phase naming rules:**
+   - Use kebab-case (e.g., `setup-database`, `add-api-endpoints`)
+   - Only include **implementation work** - code changes to fulfill the requirement
+   - Do NOT include: `verification`, `testing`, `pr-creation`, `review`, `cleanup`
+     (these are handled automatically by the system)
+
+2. Create `.gba/{{ feature_slug }}/specs/verification.md`:
    - How to verify each phase
    - Test cases or acceptance criteria
 
-3. Tell user: **"Spec files created. Please review and say 'approved' to finalize the plan."**
-
-⚠️ **STOP HERE. When user approves, the system will automatically generate state.yml and exit.**
+3. Tell user: **"Spec files created. Please review them and type /done when satisfied."**
 
 ## RULES
 
-1. **Create worktree FIRST** - before any discussion
-2. **TWO approvals required**:
-   - First: after presenting design in chat
-   - Second: after creating spec files
-3. **NEVER skip approvals** - wait for explicit "approved" from user
-4. **DO NOT create state.yml** - system generates it automatically
-5. **ONLY create these files**:
-   - `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/design.md`
-   - `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/verification.md`
+1. **TWO steps with user interaction**:
+   - First: present design in chat -> wait for "approved"
+   - Second: create spec files -> tell user to type /done
+2. **NEVER skip approval** - wait for explicit "approved" from user
+3. **DO NOT create state.yml** - system generates it automatically after /done
+4. **ONLY create these files**:
+   - `.gba/{{ feature_slug }}/specs/design.md`
+   - `.gba/{{ feature_slug }}/specs/verification.md`
+5. **DO NOT implement code** - only plan and create specs

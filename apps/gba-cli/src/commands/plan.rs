@@ -4,6 +4,7 @@
 //! TUI session to plan a new feature through conversation with Claude.
 
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -23,9 +24,10 @@ use crate::utils;
 /// 1. Checks if GBA is initialized
 /// 2. Checks if the feature already exists
 /// 3. Generates a new feature ID
-/// 4. Creates the Engine with prompts loaded
-/// 5. Launches the TUI application
-/// 6. On completion, creates git worktree and saves state
+/// 4. Creates git worktree and spec directories
+/// 5. Creates the Engine with prompts loaded
+/// 6. Launches the TUI application
+/// 7. On completion, generates state.yml if specs exist
 ///
 /// # Arguments
 ///
@@ -38,8 +40,8 @@ use crate::utils;
 /// Returns an error if:
 /// - GBA is not initialized
 /// - Feature already exists
+/// - Git worktree creation fails
 /// - TUI cannot be launched
-/// - Git operations fail
 pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> {
     info!(slug = slug, workdir = %workdir.display(), "starting plan command");
 
@@ -57,23 +59,39 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     let feature_id = utils::next_feature_id(workdir)?;
     info!(feature_id = %feature_id, "generated feature ID");
 
-    // Create the engine
-    let engine = utils::create_engine(workdir)?;
-
     // Detect base branch
     let base_branch = utils::detect_default_branch(workdir);
     info!(base_branch = %base_branch, "detected base branch");
+
+    // Create git worktree
+    let branch_name = format!("feature/{}-{}", feature_id, slug);
+    let worktree_path = utils::feature_worktree_path(workdir, slug);
+    println!("Creating worktree for feature '{}'...", slug);
+    create_worktree(workdir, &worktree_path, &branch_name)?;
+    info!(worktree = %worktree_path.display(), branch = %branch_name, "worktree created");
+
+    // Create spec directories
+    let specs_dir = utils::feature_specs_dir(workdir, slug);
+    std::fs::create_dir_all(&specs_dir)
+        .map_err(|e| CliError::Io(format!("failed to create specs directory: {}", e)))?;
+    info!(specs_dir = %specs_dir.display(), "specs directory created");
+
+    // Create the engine (context is the worktree, not main repo)
+    let engine = utils::create_engine_with_context(workdir, &worktree_path)?;
 
     // Launch TUI
     let mut app = App::new(
         slug.to_string(),
         feature_id.clone(),
         base_branch.clone(),
-        workdir,
+        &worktree_path,
     );
 
+    println!("Worktree: {}", worktree_path.display());
+    println!("Branch: {}", branch_name);
+    println!();
     println!("Starting interactive planning session...");
-    println!("Press Ctrl+C to exit at any time.");
+    println!("Type /done when planning is complete.");
     println!();
 
     // Run the TUI
@@ -99,6 +117,35 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     } else {
         println!();
         println!("Planning session cancelled.");
+    }
+
+    Ok(())
+}
+
+/// Create a git worktree for the feature.
+fn create_worktree(
+    workdir: &Path,
+    worktree_path: &Path,
+    branch_name: &str,
+) -> Result<(), CliError> {
+    let output = Command::new("git")
+        .current_dir(workdir)
+        .args([
+            "worktree",
+            "add",
+            worktree_path.to_string_lossy().as_ref(),
+            "-b",
+            branch_name,
+        ])
+        .output()
+        .map_err(|e| CliError::Git(format!("failed to run git worktree add: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliError::Git(format!(
+            "failed to create worktree: {}",
+            stderr.trim()
+        )));
     }
 
     Ok(())
@@ -153,37 +200,58 @@ fn generate_state(
 }
 
 /// Extract phase information from design.md content.
+///
+/// Looks for a `## Phases` section with a list of phases in the format:
+/// ```markdown
+/// ## Phases
+///
+/// - phase-name: Description
+/// - another-phase: Description
+/// ```
 fn extract_phases_from_design(content: &str) -> Vec<PhaseState> {
     let mut phases = Vec::new();
+    let mut in_phases_section = false;
 
-    // Look for patterns like "## Phase 1:", "## 1.", "### Phase:", etc.
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with('#') {
-            let text = trimmed.trim_start_matches('#').trim();
-            // Check for phase-like patterns
-            if text.to_lowercase().starts_with("phase")
-                || text.chars().next().is_some_and(|c| c.is_ascii_digit())
-            {
-                // Extract a reasonable phase name
-                let name = text
-                    .split(':')
-                    .next()
-                    .unwrap_or(text)
-                    .trim()
-                    .to_lowercase()
-                    .replace(' ', "-");
 
-                if !name.is_empty() && name.len() < 50 {
-                    phases.push(PhaseState {
-                        name,
-                        status: PhaseStatus::Pending,
-                        started_at: None,
-                        completed_at: None,
-                        commit_sha: None,
-                        stats: None,
-                    });
-                }
+        // Check for "## Phases" header (case-insensitive)
+        if trimmed.starts_with("##") && !trimmed.starts_with("###") {
+            let header = trimmed.trim_start_matches('#').trim().to_lowercase();
+            in_phases_section = header == "phases";
+            continue;
+        }
+
+        // Stop if we hit another ## header while in phases section
+        if in_phases_section && trimmed.starts_with("##") {
+            break;
+        }
+
+        // Parse list items in phases section
+        if in_phases_section && (trimmed.starts_with('-') || trimmed.starts_with('*')) {
+            let item = trimmed.trim_start_matches(['-', '*']).trim();
+            if item.is_empty() {
+                continue;
+            }
+
+            // Extract phase name (before colon if present)
+            let name = item
+                .split(':')
+                .next()
+                .unwrap_or(item)
+                .trim()
+                .to_lowercase()
+                .replace(' ', "-");
+
+            if !name.is_empty() && name.len() < 50 {
+                phases.push(PhaseState {
+                    name,
+                    status: PhaseStatus::Pending,
+                    started_at: None,
+                    completed_at: None,
+                    commit_sha: None,
+                    stats: None,
+                });
             }
         }
     }

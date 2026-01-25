@@ -4,10 +4,11 @@
 //! It parses command-line arguments and dispatches to the appropriate
 //! command handler.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Parser;
+use tokio::signal;
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -36,19 +37,33 @@ async fn main() -> Result<()> {
     // Setup logging with file output
     setup_logging(&workdir, cli.verbose);
 
-    // Dispatch to command handler
-    match cli.command {
+    // Run the command with Ctrl+C handling
+    tokio::select! {
+        result = run_command(cli.command, &workdir, cli.verbose) => {
+            result
+        }
+        _ = signal::ctrl_c() => {
+            // Graceful shutdown on Ctrl+C
+            println!("\nInterrupted. Shutting down...");
+            Ok(())
+        }
+    }
+}
+
+/// Dispatch to command handler.
+async fn run_command(command: Command, workdir: &Path, verbose: bool) -> Result<()> {
+    match command {
         Command::Init => {
-            commands::run_init(&workdir, cli.verbose).await?;
+            commands::run_init(workdir, verbose).await?;
         }
         Command::List => {
-            commands::run_list(&workdir).await?;
+            commands::run_list(workdir).await?;
         }
         Command::Status { slug } => {
-            commands::run_status(&workdir, &slug).await?;
+            commands::run_status(workdir, &slug).await?;
         }
         Command::Plan { slug } => {
-            commands::run_plan(&workdir, &slug, cli.verbose).await?;
+            commands::run_plan(workdir, &slug, verbose).await?;
         }
         Command::Run {
             slug,
@@ -61,10 +76,10 @@ async fn main() -> Result<()> {
                 dry_run,
                 restart,
             };
-            commands::run_run(&workdir, &slug, options).await?;
+            commands::run_run(workdir, &slug, options).await?;
         }
         Command::Clean { dry_run, force } => {
-            commands::run_clean(&workdir, dry_run, force).await?;
+            commands::run_clean(workdir, dry_run, force).await?;
         }
     }
 

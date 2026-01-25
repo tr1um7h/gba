@@ -1,6 +1,13 @@
 # GBA Plan Task Configuration
+# Plan mode allows reading, creating, and editing spec files
 preset: true
-tools: []              # empty = all tools allowed
+tools:
+  - Read
+  - Glob
+  - Grep
+  - Write             # For creating spec files (design.md, verification.md)
+  - Edit              # For editing spec files after user feedback
+  - WebFetch
+  - WebSearch
 disallowedTools:
-  - Edit               # Plan mode should NOT edit existing files
-  - NotebookEdit       # Plan mode should NOT edit notebooks
+  - Bash              # No shell commands
