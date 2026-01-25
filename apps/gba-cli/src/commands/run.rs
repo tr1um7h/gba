@@ -5,7 +5,7 @@
 //! and PR creation with resume support.
 
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use gba_core::event::PrintEventHandler;
@@ -62,6 +62,40 @@ impl CheckConfig {
     /// Check if the output indicates failure.
     fn is_failure(&self, output: &str) -> bool {
         self.failure_keywords.iter().any(|kw| output.contains(kw))
+    }
+}
+
+/// Context for task execution, holding commonly used paths and identifiers.
+///
+/// This struct eliminates repeated calculation of `worktree_path` and provides
+/// a consistent set of identifiers for task context creation.
+#[derive(Debug, Clone)]
+struct TaskContext {
+    /// Path to the worktree directory.
+    worktree_path: PathBuf,
+    /// Feature ID (e.g., "0001").
+    feature_id: String,
+    /// Feature slug (e.g., "my-feature").
+    feature_slug: String,
+}
+
+impl TaskContext {
+    /// Create a new task context from workdir and feature state.
+    fn new(workdir: &Path, state: &FeatureState) -> Self {
+        Self {
+            worktree_path: utils::feature_worktree_path(workdir, &state.feature.slug),
+            feature_id: state.feature.id.clone(),
+            feature_slug: state.feature.slug.clone(),
+        }
+    }
+
+    /// Create base context JSON for task execution.
+    fn base_context(&self) -> serde_json::Value {
+        json!({
+            "repo_path": self.worktree_path.display().to_string(),
+            "feature_id": self.feature_id,
+            "feature_slug": self.feature_slug,
+        })
     }
 }
 
@@ -268,12 +302,14 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
         );
     }
 
+    // Create task context (computes worktree_path once)
+    let ctx = TaskContext::new(workdir, &state);
+
     // Verify worktree exists
-    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
-    if !worktree_path.exists() {
+    if !ctx.worktree_path.exists() {
         return Err(CliError::InvalidState(format!(
             "worktree not found: {}",
-            worktree_path.display()
+            ctx.worktree_path.display()
         )));
     }
 
@@ -283,12 +319,12 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     state.save(&feature_dir)?;
 
     // Create engine with worktree as working directory
-    let engine = utils::create_engine_with_context(workdir, &worktree_path)?;
+    let engine = utils::create_engine_with_context(workdir, &ctx.worktree_path)?;
 
     // Execute phases
     let result = execute_phases(
         &engine,
-        workdir,
+        &ctx,
         &feature_dir,
         &mut state,
         start_phase,
@@ -307,8 +343,8 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
 
             let review_passed = run_check_fix_loop(
                 &CheckConfig::REVIEW,
-                || run_review(&engine, workdir, &state),
-                |feedback| run_fix(&engine, workdir, &state, "code review", feedback),
+                || run_review(&engine, &ctx),
+                |feedback| run_fix(&engine, &ctx, "code review", feedback),
             )
             .await?;
 
@@ -327,8 +363,8 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
 
             let verification_passed = run_check_fix_loop(
                 &CheckConfig::VERIFICATION,
-                || run_verification(&engine, workdir, &state),
-                |feedback| run_fix(&engine, workdir, &state, "verification", feedback),
+                || run_verification(&engine, &ctx),
+                |feedback| run_fix(&engine, &ctx, "verification", feedback),
             )
             .await?;
 
@@ -348,7 +384,7 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
                 println!();
                 println!("Creating pull request...");
 
-                match create_pull_request(workdir, &mut state).await {
+                match create_pull_request(&ctx, &mut state).await {
                     Ok(pr_url) => {
                         println!("PR created: {}", pr_url);
                         state.result.pr_url = Some(pr_url);
@@ -431,7 +467,7 @@ fn detect_resume_point(state: &FeatureState) -> usize {
 /// Execute the remaining phases.
 async fn execute_phases(
     engine: &Engine<'_>,
-    workdir: &Path,
+    ctx: &TaskContext,
     feature_dir: &Path,
     state: &mut FeatureState,
     start_phase: usize,
@@ -459,8 +495,6 @@ async fn execute_phases(
         state.save(feature_dir)?;
 
         // Build context for the execute task
-        // Note: worktree_path is derived from workdir + slug
-        let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
         let phases_context: Vec<serde_json::Value> = state
             .phases
             .iter()
@@ -473,16 +507,17 @@ async fn execute_phases(
             })
             .collect();
 
-        let context = json!({
-            "repo_path": worktree_path.display().to_string(),
-            "feature_id": state.feature.id,
-            "feature_slug": state.feature.slug,
-            "is_resuming": is_resuming && phase_idx == start_phase,
-            "current_phase_index": phase_idx,
-            "current_phase_name": phase_name,
-            "total_phases": total_phases,
-            "phases": phases_context,
-        });
+        let mut context = ctx.base_context();
+        if let Some(obj) = context.as_object_mut() {
+            obj.insert(
+                "is_resuming".to_string(),
+                json!(is_resuming && phase_idx == start_phase),
+            );
+            obj.insert("current_phase_index".to_string(), json!(phase_idx));
+            obj.insert("current_phase_name".to_string(), json!(phase_name));
+            obj.insert("total_phases".to_string(), json!(total_phases));
+            obj.insert("phases".to_string(), json!(phases_context));
+        }
 
         // Create and run the execute task
         let task = Task::new(TaskKind::Execute, context);
@@ -503,7 +538,7 @@ async fn execute_phases(
 
         // Get commit SHA if auto-commit was done
         let commit_sha = if !dry_run {
-            get_latest_commit_sha(workdir, state)?
+            get_latest_commit_sha(ctx)?
         } else {
             None
         };
@@ -535,11 +570,9 @@ async fn execute_phases(
 }
 
 /// Get the latest commit SHA from the worktree.
-fn get_latest_commit_sha(workdir: &Path, state: &FeatureState) -> Result<Option<String>, CliError> {
-    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
-
+fn get_latest_commit_sha(ctx: &TaskContext) -> Result<Option<String>, CliError> {
     let output = std::process::Command::new("git")
-        .current_dir(&worktree_path)
+        .current_dir(&ctx.worktree_path)
         .args(["rev-parse", "--short", "HEAD"])
         .output()
         .map_err(|e| CliError::Git(format!("failed to get commit SHA: {}", e)))?;
@@ -553,38 +586,16 @@ fn get_latest_commit_sha(workdir: &Path, state: &FeatureState) -> Result<Option<
 }
 
 /// Run code review.
-async fn run_review(
-    engine: &Engine<'_>,
-    workdir: &Path,
-    state: &FeatureState,
-) -> Result<String, CliError> {
-    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
-    let context = json!({
-        "repo_path": worktree_path.display().to_string(),
-        "feature_id": state.feature.id,
-        "feature_slug": state.feature.slug,
-    });
-
-    let task = Task::new(TaskKind::Review, context);
+async fn run_review(engine: &Engine<'_>, ctx: &TaskContext) -> Result<String, CliError> {
+    let task = Task::new(TaskKind::Review, ctx.base_context());
     let result = engine.run(task).await?;
 
     Ok(result.output)
 }
 
 /// Run verification.
-async fn run_verification(
-    engine: &Engine<'_>,
-    workdir: &Path,
-    state: &FeatureState,
-) -> Result<String, CliError> {
-    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
-    let context = json!({
-        "repo_path": worktree_path.display().to_string(),
-        "feature_id": state.feature.id,
-        "feature_slug": state.feature.slug,
-    });
-
-    let task = Task::new(TaskKind::Verification, context);
+async fn run_verification(engine: &Engine<'_>, ctx: &TaskContext) -> Result<String, CliError> {
+    let task = Task::new(TaskKind::Verification, ctx.base_context());
     let result = engine.run(task).await?;
 
     Ok(result.output)
@@ -593,19 +604,15 @@ async fn run_verification(
 /// Run fix task to address review or verification issues.
 async fn run_fix(
     engine: &Engine<'_>,
-    workdir: &Path,
-    state: &FeatureState,
+    ctx: &TaskContext,
     fix_type: &str,
     feedback: String,
 ) -> Result<String, CliError> {
-    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
-    let context = json!({
-        "repo_path": worktree_path.display().to_string(),
-        "feature_id": state.feature.id,
-        "feature_slug": state.feature.slug,
-        "fix_type": fix_type,
-        "feedback": feedback,
-    });
+    let mut context = ctx.base_context();
+    if let Some(obj) = context.as_object_mut() {
+        obj.insert("fix_type".to_string(), json!(fix_type));
+        obj.insert("feedback".to_string(), json!(feedback));
+    }
 
     let task = Task::new(TaskKind::Fix, context);
     let result = engine.run(task).await?;
@@ -614,16 +621,17 @@ async fn run_fix(
 }
 
 /// Create a pull request using gh CLI.
-async fn create_pull_request(workdir: &Path, state: &mut FeatureState) -> Result<String, CliError> {
-    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
-
+async fn create_pull_request(
+    ctx: &TaskContext,
+    state: &mut FeatureState,
+) -> Result<String, CliError> {
     let branch = &state.git.branch;
     let base_branch = &state.git.base_branch;
 
     // Push the branch
     debug!("pushing branch {}", branch);
     let push_output = std::process::Command::new("git")
-        .current_dir(&worktree_path)
+        .current_dir(&ctx.worktree_path)
         .args(["push", "-u", "origin", branch])
         .output()
         .map_err(|e| CliError::Git(format!("failed to push: {}", e)))?;
@@ -670,7 +678,7 @@ Generated by GBA (Geektime Bootcamp Agent)
 
     debug!("creating PR with gh cli");
     let pr_output = std::process::Command::new("gh")
-        .current_dir(&worktree_path)
+        .current_dir(&ctx.worktree_path)
         .args([
             "pr",
             "create",
