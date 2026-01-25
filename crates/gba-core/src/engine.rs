@@ -54,7 +54,7 @@ use std::path::PathBuf;
 
 use claude_agent_sdk_rs::{
     ClaudeAgentOptions, ClaudeClient, ContentBlock, Message, PermissionMode, SystemPrompt,
-    SystemPromptPreset, ToolResultContent, query,
+    SystemPromptPreset, ToolResultContent, Tools, query,
 };
 use futures::StreamExt;
 use tracing::{debug, info, instrument, trace};
@@ -515,9 +515,9 @@ impl<'a> Engine<'a> {
             options.system_prompt = system_prompt;
         }
 
-        // Set tools configuration
+        // Set tools configuration using `tools` field (maps to --tools CLI flag)
         if !config.tools.is_empty() {
-            options.allowed_tools = config.tools.clone();
+            options.tools = Some(Tools::from(config.tools.clone()));
         }
 
         if !config.disallowed_tools.is_empty() {

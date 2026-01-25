@@ -28,9 +28,13 @@ pub fn trees_dir(workdir: &Path) -> PathBuf {
 }
 
 /// Check if GBA is initialized in the given workdir.
+///
+/// GBA is considered initialized if `.gba/config.yml` exists.
+/// This check is more robust than just checking for the directory,
+/// since other processes (like logging) may create `.gba/` subdirectories.
 #[must_use]
 pub fn is_initialized(workdir: &Path) -> bool {
-    gba_dir(workdir).exists()
+    gba_dir(workdir).join("config.yml").exists()
 }
 
 /// Find a feature directory by slug.

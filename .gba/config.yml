@@ -1,0 +1,6 @@
+agent:
+  permission_mode: auto
+git:
+  auto_commit: true
+review:
+  enabled: true

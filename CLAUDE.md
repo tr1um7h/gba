@@ -1,3 +1,7 @@
+# Project Documentation
+
+For project-specific documentation including architecture, directory structure, and development commands, see [`.gba.md`](.gba.md).
+
 # Rust guidelines
 
 ## Toolchain & Build
