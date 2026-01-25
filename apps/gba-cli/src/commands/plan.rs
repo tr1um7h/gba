@@ -3,7 +3,6 @@
 //! This module implements the `gba plan` command which opens an interactive
 //! TUI session to plan a new feature through conversation with Claude.
 
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -13,7 +12,6 @@ use gba_core::{Engine, EngineConfig};
 use gba_pm::PromptManager;
 
 use crate::error::CliError;
-use crate::git;
 use crate::state::FeatureState;
 use crate::tui::App;
 use crate::utils;
@@ -73,8 +71,8 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
 
     // Process result
     if let Some(state) = result {
-        // Planning completed - create artifacts
-        create_feature_artifacts(workdir, &state)?;
+        // Planning completed - verify artifacts created by Claude
+        verify_feature_artifacts(workdir, &state)?;
 
         println!();
         println!("Planning completed!");
@@ -124,43 +122,31 @@ fn create_engine(workdir: &Path) -> Result<Engine<'static>> {
     Ok(engine)
 }
 
-/// Create feature artifacts after planning completes.
-fn create_feature_artifacts(workdir: &Path, state: &FeatureState) -> Result<()> {
-    let feature_id = &state.feature.id;
+/// Verify feature artifacts exist after planning completes.
+///
+/// The worktree, specs, and state.yml are created by Claude during planning.
+/// This function just verifies they exist.
+fn verify_feature_artifacts(workdir: &Path, state: &FeatureState) -> Result<()> {
     let slug = &state.feature.slug;
 
-    // Create feature directory
-    let feature_dir = utils::gba_dir(workdir).join(format!("{}_{}", feature_id, slug));
-    fs::create_dir_all(&feature_dir).context("failed to create feature directory")?;
-
-    // Create specs directory
-    let specs_dir = feature_dir.join("specs");
-    fs::create_dir_all(&specs_dir).context("failed to create specs directory")?;
-
-    // Save state
-    state.save(&feature_dir).context("failed to save state")?;
-
-    info!(
-        feature_dir = %feature_dir.display(),
-        "feature artifacts created"
-    );
-
-    // Create git worktree
-    let trees_dir = utils::trees_dir(workdir);
-    if !trees_dir.exists() {
-        fs::create_dir_all(&trees_dir).context("failed to create .trees directory")?;
+    // Verify worktree exists
+    let worktree_path = utils::trees_dir(workdir).join(slug);
+    if !worktree_path.exists() {
+        warn!(
+            worktree = %worktree_path.display(),
+            "worktree not found - may need manual creation"
+        );
+    } else {
+        info!(worktree = %worktree_path.display(), "worktree verified");
     }
 
-    let worktree_path = trees_dir.join(format!("{}_{}", feature_id, slug));
-
-    // Find base branch
-    let base_branch = git::find_base_branch(workdir).unwrap_or_else(|_| "main".to_string());
-
-    // Create worktree
-    if let Err(e) = git::create_worktree(workdir, &worktree_path, &state.git.branch, &base_branch) {
-        warn!(error = %e, "failed to create worktree, continuing without it");
-    } else {
-        info!(worktree = %worktree_path.display(), "worktree created");
+    // Verify state.yml exists at .gba/{slug}/state.yml
+    let state_file = worktree_path.join(".gba").join(slug).join("state.yml");
+    if !state_file.exists() {
+        warn!(
+            state_file = %state_file.display(),
+            "state.yml not found"
+        );
     }
 
     Ok(())

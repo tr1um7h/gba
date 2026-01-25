@@ -30,10 +30,7 @@ use tracing::{debug, info, warn};
 use gba_core::{Engine, Session, TaskKind};
 
 use crate::error::CliError;
-use crate::state::{
-    FeatureInfo, FeatureResult, FeatureState, FeatureStatus, GitState, PhaseState, PhaseStatus,
-    TaskStats,
-};
+use crate::state::FeatureState;
 
 use super::chat::ChatWidget;
 use super::input::{InputAction, InputHandler};
@@ -54,7 +51,9 @@ enum RequestMessage {
 #[derive(Debug, Clone, Default)]
 struct SessionStats {
     turns: u32,
+    #[allow(dead_code)]
     input_tokens: u64,
+    #[allow(dead_code)]
     output_tokens: u64,
     cost_usd: f64,
 }
@@ -403,9 +402,31 @@ impl App {
 
         // Return feature state if planning completed
         if self.phase == PlanPhase::Done {
-            Ok(Some(self.create_feature_state()))
+            // Try to load state from worktree (created by Claude)
+            Ok(self.load_feature_state())
         } else {
             Ok(None)
+        }
+    }
+
+    /// Load feature state from the worktree's state.yml file.
+    ///
+    /// Returns None if the file doesn't exist (e.g., user typed /done before completion).
+    fn load_feature_state(&self) -> Option<FeatureState> {
+        // Path: .trees/{id}_{slug}/.gba/{slug}/
+        let state_dir = self
+            .workdir
+            .join(".trees")
+            .join(self.feature_slug.clone())
+            .join(".gba")
+            .join(&self.feature_slug);
+
+        match FeatureState::load(&state_dir) {
+            Ok(state) => Some(state),
+            Err(e) => {
+                debug!(error = %e, "could not load state.yml, plan may not be complete");
+                None
+            }
         }
     }
 
@@ -475,13 +496,17 @@ impl App {
     /// Check for phase transitions based on file existence.
     ///
     /// Instead of relying on keyword matching (unreliable), we check if
-    /// the state.yml file has been created, which indicates the plan is complete.
+    /// the state.yml file has been created in the worktree, which indicates
+    /// the plan is complete.
     fn check_phase_transition(&mut self) {
-        // Check if state.yml exists - this is the definitive completion signal
+        // Check if state.yml exists in worktree - this is the definitive completion signal
+        // Path: .trees/{id}_{slug}/.gba/{slug}/state.yml
         let state_file = self
             .workdir
+            .join(".trees")
+            .join(self.feature_slug.clone())
             .join(".gba")
-            .join(format!("{}_{}", self.feature_id, self.feature_slug))
+            .join(&self.feature_slug)
             .join("state.yml");
 
         if state_file.exists() {
@@ -489,43 +514,6 @@ impl App {
             info!(feature_slug = %self.feature_slug, "planning completed (state.yml detected)");
             // Auto-exit when planning is done
             self.running = false;
-        }
-    }
-
-    /// Create the feature state for saving.
-    fn create_feature_state(&self) -> FeatureState {
-        let now = Utc::now();
-
-        FeatureState {
-            feature: FeatureInfo {
-                id: self.feature_id.clone(),
-                slug: self.feature_slug.clone(),
-                created_at: now,
-                updated_at: now,
-            },
-            status: FeatureStatus::Planned,
-            current_phase: 0,
-            git: GitState {
-                worktree_path: format!(".trees/{}_{}", self.feature_id, self.feature_slug),
-                branch: format!("feature/{}-{}", self.feature_id, self.feature_slug),
-                base_branch: "main".to_string(),
-            },
-            phases: vec![PhaseState {
-                name: "setup".to_string(),
-                status: PhaseStatus::Pending,
-                started_at: None,
-                completed_at: None,
-                commit_sha: None,
-                stats: None,
-            }],
-            total_stats: TaskStats {
-                turns: self.stats.turns,
-                input_tokens: self.stats.input_tokens,
-                output_tokens: self.stats.output_tokens,
-                cost_usd: self.stats.cost_usd,
-            },
-            result: FeatureResult::default(),
-            error: None,
         }
     }
 

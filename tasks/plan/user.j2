@@ -1,10 +1,24 @@
 Plan the feature `{{ feature_slug }}`.
 
-## Step 1: Understand
+## Step 1: Setup Worktree (DO THIS FIRST)
+
+Create the git worktree for this feature:
+
+```bash
+git worktree add .trees/{{ feature_slug }} -b feature/{{ feature_id }}-{{ feature_slug }}
+```
+
+This creates:
+- Branch: `feature/{{ feature_id }}-{{ feature_slug }}`
+- Worktree: `.trees/{{ feature_slug }}/`
+
+All implementation code will go in this worktree.
+
+## Step 2: Understand
 
 Read `.gba.md` to understand the project, then ask user what they want.
 
-## Step 2: Propose Design IN CHAT
+## Step 3: Propose Design IN CHAT
 
 Write a SHORT design summary **directly in chat** (NOT a file):
 
@@ -25,29 +39,29 @@ Does this look right? Say "approved" to proceed.
 
 **STOP and wait for user approval.**
 
-## Step 3: Generate Spec Files (after first approval)
+## Step 4: Generate Spec Files (after first approval)
 
-When user approves the design:
+When user approves the design, create spec files in the WORKTREE:
 
-1. Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`:
+1. Create `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/design.md`:
    - Feature overview and goals
    - Technical approach
    - Phase breakdown with deliverables
    - Files to modify per phase
 
-2. Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`:
+2. Create `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/verification.md`:
    - How to verify each phase
    - Test cases or acceptance criteria
 
-3. Tell user: "Spec files created. Please review them and say 'approved' to finalize."
+3. Tell user: "Spec files created in worktree. Please review them and say 'approved' to finalize."
 
 **STOP and wait for user to review and approve the spec files.**
 
-## Step 4: Finalize (after second approval)
+## Step 5: Finalize (after second approval)
 
 When user approves the spec files:
 
-1. Create `.gba/{{ feature_id }}_{{ feature_slug }}/state.yml`:
+1. Create `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/state.yml`:
    ```yaml
    feature:
      id: "{{ feature_id }}"
@@ -57,7 +71,7 @@ When user approves the spec files:
    status: planned
    current_phase: 0
    git:
-     worktree_path: ".trees/{{ feature_id }}_{{ feature_slug }}"
+     worktree_path: ".trees/{{ feature_slug }}"
      branch: "feature/{{ feature_id }}-{{ feature_slug }}"
      base_branch: "main"
    phases:
@@ -76,7 +90,8 @@ When user approves the spec files:
 
 ## RULES
 
+- **Create worktree FIRST** before any discussion
 - **TWO approvals required**: (1) design discussion, (2) spec files review
+- **All files go in worktree**: `.trees/{{ feature_slug }}/`
 - **NEVER** create state.yml before user approves spec files
-- **NEVER** skip the discussion phase
 - Keep designs SHORT
