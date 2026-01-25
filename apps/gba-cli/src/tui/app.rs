@@ -11,12 +11,9 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use crossterm::ExecutableCommand;
-use crossterm::cursor::MoveTo;
 use crossterm::event::{self, Event, KeyEvent};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
-use crossterm::terminal::{
-    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
+use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -310,30 +307,14 @@ impl App {
             warn!(error = %e, "worker task panicked");
         }
 
-        // Cleanup terminal
-        disable_raw_mode()
-            .map_err(|e| CliError::Io(format!("failed to disable raw mode: {}", e)))?;
+        // Cleanup terminal - disable bracketed paste first (not handled by ratatui::restore)
         terminal
             .backend_mut()
             .execute(DisableBracketedPaste)
             .map_err(|e| CliError::Io(format!("failed to disable bracketed paste: {}", e)))?;
-        terminal
-            .backend_mut()
-            .execute(LeaveAlternateScreen)
-            .map_err(|e| CliError::Io(format!("failed to leave alternate screen: {}", e)))?;
-        terminal
-            .show_cursor()
-            .map_err(|e| CliError::Io(format!("failed to show cursor: {}", e)))?;
 
-        // Reset cursor position and clear screen to ensure clean output after TUI
-        terminal
-            .backend_mut()
-            .execute(MoveTo(0, 0))
-            .map_err(|e| CliError::Io(format!("failed to move cursor: {}", e)))?;
-        terminal
-            .backend_mut()
-            .execute(Clear(ClearType::FromCursorDown))
-            .map_err(|e| CliError::Io(format!("failed to clear screen: {}", e)))?;
+        // Use ratatui's restore to properly cleanup terminal state
+        ratatui::restore();
 
         result
     }

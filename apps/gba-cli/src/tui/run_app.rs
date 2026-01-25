@@ -13,11 +13,8 @@
 use std::io;
 
 use crossterm::ExecutableCommand;
-use crossterm::cursor::MoveTo;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use crossterm::terminal::{
-    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
+use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -381,26 +378,8 @@ impl RunApp {
             }
         }
 
-        // Cleanup terminal
-        disable_raw_mode()
-            .map_err(|e| CliError::Io(format!("failed to disable raw mode: {}", e)))?;
-        terminal
-            .backend_mut()
-            .execute(LeaveAlternateScreen)
-            .map_err(|e| CliError::Io(format!("failed to leave alternate screen: {}", e)))?;
-        terminal
-            .show_cursor()
-            .map_err(|e| CliError::Io(format!("failed to show cursor: {}", e)))?;
-
-        // Reset cursor position and clear screen to ensure clean output after TUI
-        terminal
-            .backend_mut()
-            .execute(MoveTo(0, 0))
-            .map_err(|e| CliError::Io(format!("failed to move cursor: {}", e)))?;
-        terminal
-            .backend_mut()
-            .execute(Clear(ClearType::FromCursorDown))
-            .map_err(|e| CliError::Io(format!("failed to clear screen: {}", e)))?;
+        // Use ratatui's restore to properly cleanup terminal state
+        ratatui::restore();
 
         Ok(())
     }
