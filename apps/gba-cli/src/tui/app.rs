@@ -25,12 +25,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use serde_json::json;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use gba_core::{Engine, Session, TaskKind};
 
 use crate::error::CliError;
-use crate::utils;
 
 use super::chat::ChatWidget;
 use super::input::{InputAction, InputHandler};
@@ -355,7 +354,6 @@ impl App {
                                 if !self.streaming_response.is_empty() {
                                     let response = std::mem::take(&mut self.streaming_response);
                                     self.messages.push(ChatMessage::assistant(response));
-                                    self.check_phase_transition();
                                 }
                                 self.waiting = false;
                                 self.scroll_to_bottom();
@@ -475,50 +473,6 @@ impl App {
                 self.waiting = false;
             }
         }
-    }
-
-    /// Check for phase transitions based on file existence and user approval.
-    ///
-    /// When spec files exist (design.md and verification.md) and the last user
-    /// message was an approval, we exit the TUI. The plan.rs will generate state.yml.
-    fn check_phase_transition(&mut self) {
-        // Check if specs exist AND user approved
-        if self.specs_exist() && self.last_user_message_is_approval() {
-            self.phase = PlanPhase::Done;
-            info!(feature_slug = %self.feature_slug, "specs approved, exiting TUI");
-            self.running = false;
-        }
-    }
-
-    /// Check if spec files exist (design.md and verification.md).
-    fn specs_exist(&self) -> bool {
-        let specs_dir = utils::feature_specs_dir(&self.workdir, &self.feature_slug);
-        let design_file = specs_dir.join("design.md");
-        let verification_file = specs_dir.join("verification.md");
-        design_file.exists() && verification_file.exists()
-    }
-
-    /// Check if the last user message was an approval.
-    fn last_user_message_is_approval(&self) -> bool {
-        let approval_keywords = [
-            "approved",
-            "approve",
-            "ok",
-            "yes",
-            "lgtm",
-            "looks good",
-            "go ahead",
-            "ship it",
-        ];
-
-        // Find the last user message
-        for msg in self.messages.iter().rev() {
-            if msg.role == MessageRole::User {
-                let lower = msg.content.to_lowercase();
-                return approval_keywords.iter().any(|kw| lower.contains(kw));
-            }
-        }
-        false
     }
 
     /// Render the TUI view.
