@@ -322,6 +322,20 @@ pub struct RunOptions {
     pub restart: bool,
 }
 
+/// Result of state validation and preparation.
+struct PreparedExecution {
+    /// Path to the feature directory.
+    feature_dir: PathBuf,
+    /// Loaded and validated feature state.
+    state: FeatureState,
+    /// Task context with worktree path.
+    ctx: TaskContext,
+    /// Starting phase index.
+    start_phase: usize,
+    /// Whether this is a resume operation.
+    is_resuming: bool,
+}
+
 /// Execute a planned feature.
 ///
 /// This function orchestrates the full execution pipeline:
@@ -340,6 +354,66 @@ pub struct RunOptions {
 /// - Any phase execution fails
 /// - Git operations fail
 pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<(), CliError> {
+    // Validate and prepare state
+    let prepared = match prepare_execution(workdir, slug, &options)? {
+        Some(p) => p,
+        None => return Ok(()), // Early return (already completed or user declined)
+    };
+
+    let PreparedExecution {
+        feature_dir,
+        mut state,
+        ctx,
+        start_phase,
+        is_resuming,
+    } = prepared;
+
+    // Update state to in_progress
+    state.status = FeatureStatus::InProgress;
+    state.feature.updated_at = Utc::now();
+    state.save(&feature_dir)?;
+
+    // Create engine with worktree as working directory
+    let engine = utils::create_engine_with_context(workdir, &ctx.worktree_path)?;
+
+    // Execute phases
+    let phase_result = execute_phases(
+        &engine,
+        &ctx,
+        &feature_dir,
+        &mut state,
+        start_phase,
+        is_resuming,
+        options.dry_run,
+    )
+    .await;
+
+    if let Err(e) = phase_result {
+        save_failed_state(&mut state, &feature_dir, &e.to_string())?;
+        return Err(e);
+    }
+
+    // Run review and verification
+    if let Err(reason) = run_review_and_verification(&engine, &ctx, &mut state, &feature_dir).await
+    {
+        save_failed_state(&mut state, &feature_dir, &reason)?;
+        return Ok(());
+    }
+
+    // Finalize execution (create PR and print summary)
+    finalize_execution(&ctx, &mut state, &feature_dir, options.dry_run).await?;
+
+    Ok(())
+}
+
+/// Prepare execution by validating state and computing context.
+///
+/// Returns `None` if execution should not proceed (already completed or user declined).
+fn prepare_execution(
+    workdir: &Path,
+    slug: &str,
+    options: &RunOptions,
+) -> Result<Option<PreparedExecution>, CliError> {
     // Check initialization
     if !utils::is_initialized(workdir) {
         return Err(CliError::NotInitialized);
@@ -363,7 +437,7 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
             if let Some(ref url) = state.result.pr_url {
                 println!("PR: {}", url);
             }
-            return Ok(());
+            return Ok(None);
         }
         FeatureStatus::Failed => {
             if !options.restart {
@@ -372,7 +446,7 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
                 if let Some(ref error) = state.error {
                     println!("Error: {}", error);
                 }
-                return Ok(());
+                return Ok(None);
             }
             // Reset for restart
             reset_state_for_restart(&mut state);
@@ -422,140 +496,145 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
         )));
     }
 
-    // Update state to in_progress
-    state.status = FeatureStatus::InProgress;
-    state.feature.updated_at = Utc::now();
-    state.save(&feature_dir)?;
-
-    // Create engine with worktree as working directory
-    let engine = utils::create_engine_with_context(workdir, &ctx.worktree_path)?;
-
-    // Execute phases
-    let result = execute_phases(
-        &engine,
-        &ctx,
-        &feature_dir,
-        &mut state,
+    Ok(Some(PreparedExecution {
+        feature_dir,
+        state,
+        ctx,
         start_phase,
         is_resuming,
-        options.dry_run,
+    }))
+}
+
+/// Run code review and verification loops.
+///
+/// Returns `Ok(())` if both passed, `Err(reason)` if either failed with changes needed.
+async fn run_review_and_verification(
+    engine: &Engine<'_>,
+    ctx: &TaskContext,
+    state: &mut FeatureState,
+    feature_dir: &Path,
+) -> Result<(), String> {
+    // === Code Review Loop ===
+    println!();
+    println!("All phases completed. Running code review...");
+
+    let review_result = run_check_fix_loop(
+        &CheckConfig::REVIEW,
+        || run_review(engine, ctx),
+        |feedback| run_fix(engine, ctx, "code review", feedback),
     )
     .await;
 
-    match result {
-        Ok(()) => {
-            // All phases completed, run review and verification with fix loops
-
-            // === Code Review Loop ===
-            println!();
-            println!("All phases completed. Running code review...");
-
-            let review_result = run_check_fix_loop(
-                &CheckConfig::REVIEW,
-                || run_review(&engine, &ctx),
-                |feedback| run_fix(&engine, &ctx, "code review", feedback),
-            )
-            .await;
-
-            match review_result {
-                CheckResult::Passed => {
-                    // Continue to verification
-                }
-                CheckResult::NeedsChanges(reason) => {
-                    state.status = FeatureStatus::Failed;
-                    state.error = Some(reason);
-                    state.feature.updated_at = Utc::now();
-                    state.save(&feature_dir)?;
-                    return Ok(());
-                }
-                CheckResult::Error(e) => {
-                    // Log the error but continue - check errors shouldn't block the pipeline
-                    warn!("Code review check encountered an error: {}", e);
-                    println!("Continuing despite code review error...");
-                }
-            }
-
-            // === Verification Loop ===
-            println!();
-            println!("Running verification...");
-
-            let verification_result = run_check_fix_loop(
-                &CheckConfig::VERIFICATION,
-                || run_verification(&engine, &ctx),
-                |feedback| run_fix(&engine, &ctx, "verification", feedback),
-            )
-            .await;
-
-            match verification_result {
-                CheckResult::Passed => {
-                    // Continue to PR creation
-                }
-                CheckResult::NeedsChanges(reason) => {
-                    state.status = FeatureStatus::Failed;
-                    state.error = Some(reason);
-                    state.feature.updated_at = Utc::now();
-                    state.save(&feature_dir)?;
-                    return Ok(());
-                }
-                CheckResult::Error(e) => {
-                    // Log the error but continue - check errors shouldn't block the pipeline
-                    warn!("Verification check encountered an error: {}", e);
-                    println!("Continuing despite verification error...");
-                }
-            }
-
-            // Create PR if not dry run
-            if options.dry_run {
-                println!();
-                println!("Dry run complete. Skipping PR creation.");
-            } else {
-                println!();
-                println!("Creating pull request...");
-
-                match create_pull_request(&ctx, &mut state).await {
-                    Ok(pr_url) => {
-                        println!("PR created: {}", pr_url);
-                        state.result.pr_url = Some(pr_url);
-                        state.status = FeatureStatus::Completed;
-                    }
-                    Err(e) => {
-                        warn!("Failed to create PR: {}", e);
-                        println!("Warning: Failed to create PR: {}", e);
-                        println!("You can create the PR manually.");
-                    }
-                }
-            }
-
-            // Update final state
-            state.feature.updated_at = Utc::now();
-            if state.status != FeatureStatus::Completed {
-                state.status = FeatureStatus::Completed;
-            }
-            state.save(&feature_dir)?;
-
-            // Print summary
-            println!();
-            println!("=== Execution Summary ===");
-            println!("Feature: {} ({})", state.feature.slug, state.feature.id);
-            println!("Phases completed: {}", state.phases.len());
-            println!("Total cost: ${:.2}", state.total_stats.cost_usd);
-            println!("Total turns: {}", state.total_stats.turns);
-            if let Some(ref url) = state.result.pr_url {
-                println!("PR: {}", url);
-            }
+    match review_result {
+        CheckResult::Passed => {
+            // Continue to verification
         }
-        Err(e) => {
-            // Save failed state
-            state.status = FeatureStatus::Failed;
-            state.error = Some(e.to_string());
-            state.feature.updated_at = Utc::now();
-            state.save(&feature_dir)?;
-
-            return Err(e);
+        CheckResult::NeedsChanges(reason) => {
+            return Err(reason);
+        }
+        CheckResult::Error(e) => {
+            // Log the error but continue - check errors shouldn't block the pipeline
+            warn!("Code review check encountered an error: {}", e);
+            println!("Continuing despite code review error...");
         }
     }
 
+    // === Verification Loop ===
+    println!();
+    println!("Running verification...");
+
+    let verification_result = run_check_fix_loop(
+        &CheckConfig::VERIFICATION,
+        || run_verification(engine, ctx),
+        |feedback| run_fix(engine, ctx, "verification", feedback),
+    )
+    .await;
+
+    match verification_result {
+        CheckResult::Passed => {
+            // Continue to PR creation
+        }
+        CheckResult::NeedsChanges(reason) => {
+            return Err(reason);
+        }
+        CheckResult::Error(e) => {
+            // Log the error but continue - check errors shouldn't block the pipeline
+            warn!("Verification check encountered an error: {}", e);
+            println!("Continuing despite verification error...");
+        }
+    }
+
+    // Suppress unused warning - state and feature_dir are kept for potential future use
+    let _ = (state, feature_dir);
+
     Ok(())
+}
+
+/// Save failed state to disk.
+fn save_failed_state(
+    state: &mut FeatureState,
+    feature_dir: &Path,
+    error: &str,
+) -> Result<(), CliError> {
+    state.status = FeatureStatus::Failed;
+    state.error = Some(error.to_string());
+    state.feature.updated_at = Utc::now();
+    state.save(feature_dir)
+}
+
+/// Finalize execution by creating PR and printing summary.
+async fn finalize_execution(
+    ctx: &TaskContext,
+    state: &mut FeatureState,
+    feature_dir: &Path,
+    dry_run: bool,
+) -> Result<(), CliError> {
+    // Create PR if not dry run
+    if dry_run {
+        println!();
+        println!("Dry run complete. Skipping PR creation.");
+    } else {
+        println!();
+        println!("Creating pull request...");
+
+        match create_pull_request(ctx, state).await {
+            Ok(pr_url) => {
+                println!("PR created: {}", pr_url);
+                state.result.pr_url = Some(pr_url);
+                state.status = FeatureStatus::Completed;
+            }
+            Err(e) => {
+                warn!("Failed to create PR: {}", e);
+                println!("Warning: Failed to create PR: {}", e);
+                println!("You can create the PR manually.");
+            }
+        }
+    }
+
+    // Update final state
+    state.feature.updated_at = Utc::now();
+    if state.status != FeatureStatus::Completed {
+        state.status = FeatureStatus::Completed;
+    }
+    state.save(feature_dir)?;
+
+    // Print summary
+    print_execution_summary(state);
+
+    Ok(())
+}
+
+/// Print execution summary.
+fn print_execution_summary(state: &FeatureState) {
+    println!();
+    println!("=== Execution Summary ===");
+    println!("Feature: {} ({})", state.feature.slug, state.feature.id);
+    println!("Phases completed: {}", state.phases.len());
+    println!("Total cost: ${:.2}", state.total_stats.cost_usd);
+    println!("Total turns: {}", state.total_stats.turns);
+    if let Some(ref url) = state.result.pr_url {
+        println!("PR: {}", url);
+    }
 }
 
 /// Reset state for a restart.
