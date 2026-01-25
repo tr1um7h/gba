@@ -4,6 +4,7 @@
 //! application actions.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::app::App;
 use crate::error::CliError;
@@ -119,31 +120,51 @@ impl InputHandler {
     }
 
     /// Delete the word before the cursor.
+    ///
+    /// Uses grapheme clusters for proper Unicode support.
     fn delete_word_backward(app: &mut App) {
         let input = app.input().to_string();
-        let cursor = app.cursor_position();
+        let cursor = app.cursor_position(); // grapheme cluster index
 
         if cursor == 0 {
             return;
         }
 
-        // Find the start of the word
-        let before_cursor = &input[..cursor];
-        let trimmed = before_cursor.trim_end();
+        // Collect graphemes
+        let graphemes: Vec<&str> = input.graphemes(true).collect();
 
-        // Find the last word boundary
-        let word_start = trimmed
-            .rfind(|c: char| c.is_whitespace())
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        // Find the last word boundary (by grapheme index)
+        let mut word_start_grapheme = 0;
+        let mut found_non_whitespace = false;
 
-        // Remove characters from word_start to cursor
-        let new_input = format!("{}{}", &input[..word_start], &input[cursor..]);
+        // Iterate backwards through graphemes before cursor
+        for i in (0..cursor).rev() {
+            let grapheme = graphemes[i];
+            let is_whitespace = grapheme.chars().all(|c| c.is_whitespace());
+
+            if !is_whitespace {
+                found_non_whitespace = true;
+            } else if found_non_whitespace {
+                // Found whitespace after non-whitespace (word boundary)
+                word_start_grapheme = i + 1;
+                break;
+            }
+        }
+
+        // Build new input: graphemes before word_start + graphemes after cursor
+        let new_input: String = graphemes[..word_start_grapheme]
+            .iter()
+            .chain(graphemes[cursor..].iter())
+            .copied()
+            .collect();
+
+        // Calculate the new cursor position before setting input
+        let target_cursor = word_start_grapheme;
+
         app.set_input(new_input);
 
-        // Adjust cursor position
-        let new_cursor = word_start;
-        for _ in 0..(app.cursor_position() - new_cursor) {
+        // set_input sets cursor to end, so we need to move it back to target
+        while app.cursor_position() > target_cursor {
             app.move_cursor_left();
         }
     }

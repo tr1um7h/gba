@@ -26,6 +26,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
+use unicode_segmentation::UnicodeSegmentation;
 
 use gba_core::{Engine, Session, TaskKind};
 
@@ -603,8 +604,20 @@ impl App {
         if !self.waiting {
             // Inner width (excluding borders)
             let inner_width = area.width.saturating_sub(2) as usize;
+            // Calculate display width of text before cursor
+            // For proper Unicode support, we count grapheme clusters up to cursor
+            let text_before_cursor: String = self
+                .input
+                .graphemes(true)
+                .take(self.cursor_position)
+                .collect();
+            // Approximate display width (ASCII=1, CJK=2, others=1)
+            let display_width: usize = text_before_cursor
+                .chars()
+                .map(|c| if c.is_ascii() { 1 } else { 2 })
+                .sum();
             // Account for "> " prefix (2 chars)
-            let cursor_with_prefix = self.cursor_position + 2;
+            let cursor_with_prefix = display_width + 2;
             let cursor_row = cursor_with_prefix / inner_width;
             let cursor_col = cursor_with_prefix % inner_width;
 
@@ -660,52 +673,80 @@ impl App {
         &self.input
     }
 
-    /// Get the cursor position.
+    /// Get the cursor position (grapheme cluster index).
     pub fn cursor_position(&self) -> usize {
         self.cursor_position
     }
 
+    /// Get the byte offset for the current cursor position.
+    fn cursor_byte_offset(&self) -> usize {
+        self.input
+            .grapheme_indices(true)
+            .nth(self.cursor_position)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len())
+    }
+
+    /// Get the number of grapheme clusters in the input.
+    fn grapheme_count(&self) -> usize {
+        self.input.graphemes(true).count()
+    }
+
     /// Set the input buffer.
     pub fn set_input(&mut self, input: String) {
-        self.cursor_position = input.len();
+        self.cursor_position = input.graphemes(true).count();
         self.input = input;
     }
 
     /// Insert a character at the cursor position.
     pub fn insert_char(&mut self, c: char) {
-        self.input.insert(self.cursor_position, c);
+        let byte_offset = self.cursor_byte_offset();
+        self.input.insert(byte_offset, c);
         self.cursor_position += 1;
     }
 
     /// Insert a string at the cursor position (used for paste).
     pub fn insert_str(&mut self, s: &str) {
-        self.input.insert_str(self.cursor_position, s);
-        self.cursor_position += s.len();
+        let byte_offset = self.cursor_byte_offset();
+        self.input.insert_str(byte_offset, s);
+        self.cursor_position += s.graphemes(true).count();
     }
 
-    /// Delete the character before the cursor.
+    /// Delete the grapheme cluster before the cursor.
     pub fn delete_char(&mut self) {
         if self.cursor_position > 0 {
             self.cursor_position -= 1;
-            self.input.remove(self.cursor_position);
+            let byte_offset = self.cursor_byte_offset();
+            // Find the length of the grapheme to remove
+            if let Some((_, grapheme)) = self.input.grapheme_indices(true).nth(self.cursor_position)
+            {
+                let grapheme_len = grapheme.len();
+                self.input.drain(byte_offset..byte_offset + grapheme_len);
+            }
         }
     }
 
-    /// Delete the character at the cursor.
+    /// Delete the grapheme cluster at the cursor.
     pub fn delete_char_forward(&mut self) {
-        if self.cursor_position < self.input.len() {
-            self.input.remove(self.cursor_position);
+        if self.cursor_position < self.grapheme_count() {
+            let byte_offset = self.cursor_byte_offset();
+            // Find the length of the grapheme to remove
+            if let Some((_, grapheme)) = self.input.grapheme_indices(true).nth(self.cursor_position)
+            {
+                let grapheme_len = grapheme.len();
+                self.input.drain(byte_offset..byte_offset + grapheme_len);
+            }
         }
     }
 
-    /// Move cursor left.
+    /// Move cursor left by one grapheme cluster.
     pub fn move_cursor_left(&mut self) {
         self.cursor_position = self.cursor_position.saturating_sub(1);
     }
 
-    /// Move cursor right.
+    /// Move cursor right by one grapheme cluster.
     pub fn move_cursor_right(&mut self) {
-        if self.cursor_position < self.input.len() {
+        if self.cursor_position < self.grapheme_count() {
             self.cursor_position += 1;
         }
     }
@@ -717,7 +758,7 @@ impl App {
 
     /// Move cursor to the end.
     pub fn move_cursor_end(&mut self) {
-        self.cursor_position = self.input.len();
+        self.cursor_position = self.grapheme_count();
     }
 
     /// Clear the input buffer.
