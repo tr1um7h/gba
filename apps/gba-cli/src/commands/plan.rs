@@ -22,8 +22,8 @@ use crate::utils;
 ///
 /// This function:
 /// 1. Checks if GBA is initialized
-/// 2. Checks if the feature already exists
-/// 3. Generates a new feature ID
+/// 2. Checks if the feature/worktree already exists and handles resume
+/// 3. Generates a new feature ID (if new)
 /// 4. Creates git worktree and spec directories
 /// 5. Creates the Engine with prompts loaded
 /// 6. Launches the TUI application
@@ -39,7 +39,7 @@ use crate::utils;
 ///
 /// Returns an error if:
 /// - GBA is not initialized
-/// - Feature already exists
+/// - Feature is already completed
 /// - Git worktree creation fails
 /// - TUI cannot be launched
 pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> {
@@ -50,31 +50,39 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
         return Err(CliError::NotInitialized.into());
     }
 
-    // Check if feature already exists
-    if utils::feature_exists(workdir, slug) {
-        return Err(CliError::FeatureExists(slug.to_string()).into());
-    }
-
-    // Generate next feature ID
-    let feature_id = utils::next_feature_id(workdir)?;
-    info!(feature_id = %feature_id, "generated feature ID");
-
-    // Detect base branch
-    let base_branch = utils::detect_default_branch(workdir);
-    info!(base_branch = %base_branch, "detected base branch");
-
-    // Create git worktree
-    let branch_name = format!("feature/{}-{}", feature_id, slug);
+    // Check if worktree already exists
     let worktree_path = utils::feature_worktree_path(workdir, slug);
-    println!("Creating worktree for feature '{}'...", slug);
-    create_worktree(workdir, &worktree_path, &branch_name)?;
-    info!(worktree = %worktree_path.display(), branch = %branch_name, "worktree created");
+    let worktree_exists = worktree_path.exists();
 
-    // Create spec directories
+    // Check existing feature state
+    let (feature_id, base_branch, branch_name, is_resume) = if worktree_exists {
+        // Worktree exists - check if we can resume
+        handle_existing_worktree(workdir, slug, &worktree_path)?
+    } else {
+        // New feature
+        let feature_id = utils::next_feature_id(workdir)?;
+        info!(feature_id = %feature_id, "generated feature ID");
+
+        let base_branch = utils::detect_default_branch(workdir);
+        info!(base_branch = %base_branch, "detected base branch");
+
+        let branch_name = format!("feature/{}-{}", feature_id, slug);
+
+        // Create git worktree
+        println!("Creating worktree for feature '{}'...", slug);
+        create_worktree(workdir, &worktree_path, &branch_name)?;
+        info!(worktree = %worktree_path.display(), branch = %branch_name, "worktree created");
+
+        (feature_id, base_branch, branch_name, false)
+    };
+
+    // Create spec directories (may already exist for resume)
     let specs_dir = utils::feature_specs_dir(workdir, slug);
     std::fs::create_dir_all(&specs_dir)
         .map_err(|e| CliError::Io(format!("failed to create specs directory: {}", e)))?;
-    info!(specs_dir = %specs_dir.display(), "specs directory created");
+    if !is_resume {
+        info!(specs_dir = %specs_dir.display(), "specs directory created");
+    }
 
     // Create the engine (context is the worktree, not main repo)
     let engine = utils::create_engine_with_context(workdir, &worktree_path)?;
@@ -90,7 +98,11 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     println!("Worktree: {}", worktree_path.display());
     println!("Branch: {}", branch_name);
     println!();
-    println!("Starting interactive planning session...");
+    if is_resume {
+        println!("Resuming interactive planning session...");
+    } else {
+        println!("Starting interactive planning session...");
+    }
     println!("Type /done when planning is complete.");
     println!();
 
@@ -120,6 +132,114 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     }
 
     Ok(())
+}
+
+/// Handle an existing worktree - determine if we can resume planning.
+///
+/// Returns `(feature_id, base_branch, branch_name, is_resume)` if resumable.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Feature is already completed (should use `gba status`)
+/// - Feature is already planned and ready (should use `gba run`)
+/// - Cannot determine branch name from worktree
+fn handle_existing_worktree(
+    workdir: &Path,
+    slug: &str,
+    worktree_path: &Path,
+) -> Result<(String, String, String, bool), CliError> {
+    // Get the branch name from the worktree
+    let branch_output = Command::new("git")
+        .current_dir(worktree_path)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .map_err(|e| CliError::Git(format!("failed to get branch: {}", e)))?;
+
+    if !branch_output.status.success() {
+        return Err(CliError::Git(
+            "failed to get branch name from worktree".to_string(),
+        ));
+    }
+
+    let branch_name = String::from_utf8_lossy(&branch_output.stdout)
+        .trim()
+        .to_string();
+
+    // Extract feature ID from branch name (format: feature/<id>-<slug>)
+    let feature_id = branch_name
+        .strip_prefix("feature/")
+        .and_then(|s| s.split('-').next())
+        .ok_or_else(|| {
+            CliError::Git(format!(
+                "cannot parse feature ID from branch name: {}",
+                branch_name
+            ))
+        })?
+        .to_string();
+
+    // Check if state.yml exists
+    let feature_dir = utils::feature_gba_dir(workdir, slug);
+    let state_file = feature_dir.join("state.yml");
+
+    if state_file.exists() {
+        // Load state and check status
+        let state = FeatureState::load(&feature_dir)?;
+
+        match state.status {
+            FeatureStatus::Completed => {
+                println!("Feature '{}' is already completed.", slug);
+                if let Some(ref url) = state.result.pr_url {
+                    println!("PR: {}", url);
+                }
+                return Err(CliError::FeatureExists(slug.to_string()));
+            }
+            FeatureStatus::InProgress | FeatureStatus::Failed => {
+                println!(
+                    "Feature '{}' is already planned and ready for execution.",
+                    slug
+                );
+                println!();
+                println!("To execute: gba run {}", slug);
+                println!(
+                    "To replan:  gba plan {} --restart (not yet implemented)",
+                    slug
+                );
+                return Err(CliError::FeatureExists(slug.to_string()));
+            }
+            FeatureStatus::Planned => {
+                // Check if specs exist
+                let specs_dir = utils::feature_specs_dir(workdir, slug);
+                let design_exists = specs_dir.join("design.md").exists();
+                let verification_exists = specs_dir.join("verification.md").exists();
+
+                if design_exists && verification_exists {
+                    println!(
+                        "Feature '{}' is already planned and ready for execution.",
+                        slug
+                    );
+                    println!();
+                    println!("To execute: gba run {}", slug);
+                    return Err(CliError::FeatureExists(slug.to_string()));
+                }
+
+                // Incomplete planning - can resume
+                println!("Found existing worktree for feature '{}'.", slug);
+                println!("Planning was not completed. Resuming...");
+                println!();
+            }
+        }
+    } else {
+        // No state.yml - planning never completed
+        println!("Found existing worktree for feature '{}'.", slug);
+        println!("Planning was not completed. Resuming...");
+        println!();
+    }
+
+    // Detect base branch
+    let base_branch = utils::detect_default_branch(workdir);
+
+    Ok((feature_id, base_branch, branch_name, true))
 }
 
 /// Create a git worktree for the feature.
