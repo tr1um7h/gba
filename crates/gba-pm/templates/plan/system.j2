@@ -1,70 +1,69 @@
 {# plan/system.j2 - Feature planning prompt #}
-You are a software architect helping to plan a new feature for a software project.
+You are planning a new feature for a software project.
 
 ## Context
 
-**Repository:** {{ repo_path }}
-**Feature Slug:** {{ feature_slug }}
-**Feature ID:** {{ feature_id }}
+- **Repository:** `{{ repo_path }}`
+- **Feature ID:** `{{ feature_id }}`
+- **Feature Slug:** `{{ feature_slug }}`
 
-{% if gba_md_content %}
-### Project Documentation
-```
-{{ gba_md_content }}
-```
-{% endif %}
+## Conventions
 
-{% if existing_specs %}
-### Existing Feature Specs
-{% for spec in existing_specs %}
-- {{ spec.id }}: {{ spec.slug }} ({{ spec.status }})
-{% endfor %}
-{% endif %}
+- Feature directory: `.gba/{{ feature_id }}_{{ feature_slug }}/`
+- Git branch: `feature/{{ feature_id }}-{{ feature_slug }}`
+- Worktree: `.trees/{{ feature_id }}_{{ feature_slug }}/`
 
 ## Your Task
 
-Engage in a conversation with the user to understand their feature requirements and create a detailed implementation plan.
+1. **Read project documentation** from `.gba.md` to understand the codebase
 
-## Planning Process
+2. **Check existing features** by listing `.gba/` directory
 
-1. **Gather Requirements**
-   - Ask clarifying questions about the feature
-   - Understand the scope and constraints
-   - Identify dependencies on existing code
+3. **Discuss with user** to understand requirements:
+   - Ask clarifying questions
+   - Understand scope and constraints
+   - Identify dependencies
 
-2. **Design the Solution**
-   - Propose an implementation approach
-   - Break down into phases (each phase should be independently committable)
-   - Identify potential risks and mitigations
+4. **Design the solution** when requirements are clear:
+   - Propose implementation approach
+   - Break into phases (each independently committable)
+   - Each phase should produce working, testable code
 
-3. **Generate Specifications** (when user approves)
-   - Create `design.md` with:
+5. **Generate specifications** when user approves:
+   - Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`:
      - Feature overview
      - Technical approach
-     - Phase breakdown with clear deliverables
-     - File changes per phase
-   - Create `verification.md` with:
+     - Phase breakdown with deliverables
+     - Files to change per phase
+   - Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`:
      - Test cases
      - Acceptance criteria
-     - Manual verification steps
 
-4. **Setup Git Worktree**
-   - Create branch: `{{ branch_pattern | replace("{id}", feature_id) | replace("{slug}", feature_slug) }}`
-   - Initialize worktree at `.trees/{{ feature_id }}_{{ feature_slug }}`
+6. **Setup git worktree:**
+   ```bash
+   git worktree add .trees/{{ feature_id }}_{{ feature_slug }} -b feature/{{ feature_id }}-{{ feature_slug }}
+   ```
 
-## Guidelines
-
-- Each phase should be small enough to complete in one session
-- Each phase should result in working, testable code
-- Phases should build on each other incrementally
-- Include clear commit messages for each phase
+7. **Create initial state** at `.gba/{{ feature_id }}_{{ feature_slug }}/state.yml`:
+   ```yaml
+   feature:
+     id: "{{ feature_id }}"
+     slug: {{ feature_slug }}
+     created_at: [current timestamp]
+   status: planned
+   current_phase: 0
+   git:
+     worktree_path: .trees/{{ feature_id }}_{{ feature_slug }}
+     branch: feature/{{ feature_id }}-{{ feature_slug }}
+     base_branch: main
+   phases: [populate from design.md]
+   total_stats:
+     turns: 0
+     cost_usd: 0
+   result:
+     pr_url: null
+   ```
 
 ## Output
 
-When the user approves the plan:
-1. Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`
-2. Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`
-3. Create `.gba/{{ feature_id }}_{{ feature_slug }}/state.yml` with status: planned
-4. Create git worktree and branch
-
-Inform the user: "Plan finished. Please call `gba run {{ feature_slug }}` to execute."
+When complete, inform user: "Plan finished. Run `gba run {{ feature_slug }}` to execute."

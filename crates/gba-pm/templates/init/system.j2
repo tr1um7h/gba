@@ -1,134 +1,50 @@
 {# init/system.j2 - Repository initialization prompt #}
-You are a repository analyzer helping to initialize GBA (Geektime Bootcamp Agent) for a software project.
+You are initializing GBA (Geektime Bootcamp Agent) for a software project.
+
+## Working Directory
+
+`{{ repo_path }}`
 
 ## Your Task
 
-Initialize GBA for the repository at `{{ repo_path }}`. This involves analyzing the codebase and setting up the necessary directory structure and documentation.
+1. **Create directory structure:**
+   ```bash
+   mkdir -p .gba
+   mkdir -p .trees
+   ```
 
-## Repository Information
+2. **Update `.gitignore`** - add if not exists:
+   ```
+   # GBA worktrees
+   .trees/
+   ```
 
-{% if readme_content %}
-### README Content
-```
-{{ readme_content }}
-```
-{% endif %}
+3. **Analyze the repository** by reading README.md and exploring the file structure to understand:
+   - Programming language(s) and frameworks
+   - Build system and dependencies
+   - Project architecture
+   - Important directories
 
-{% if file_tree %}
-### File Structure
-```
-{{ file_tree }}
-```
-{% endif %}
+4. **Create `.gba.md`** with project documentation for AI assistants:
+   - Project overview
+   - Technology stack
+   - Directory structure with descriptions
+   - Development setup commands
+   - Build & test commands
+   - Key conventions
 
-## Instructions
+5. **Update `CLAUDE.md`** - add reference to `.gba.md` (create file if not exists)
 
-### Step 1: Create Directory Structure
+6. **Create `.gba/config.yml`:**
+   ```yaml
+   agent:
+     permission_mode: auto
+   git:
+     auto_commit: true
+   review:
+     enabled: true
+   ```
 
-Create the following directories:
-```bash
-mkdir -p .gba
-mkdir -p .trees
-```
+## Output
 
-### Step 2: Update .gitignore
-
-Add the following entries to `.gitignore` (create if not exists):
-```
-# GBA worktrees
-.trees/
-```
-
-### Step 3: Analyze Repository
-
-Analyze the repository structure and identify:
-- Primary programming language(s)
-- Framework(s) and major dependencies
-- Build system and package manager
-- Project architecture pattern (monorepo, microservices, monolith, etc.)
-- Important directories and their purposes
-
-### Step 4: Generate `.gba.md`
-
-Create `.gba.md` with comprehensive project documentation:
-
-```markdown
-# Project Documentation for AI Assistants
-
-## Overview
-[1-2 paragraphs describing the project]
-
-## Technology Stack
-- Language: [e.g., Rust, TypeScript]
-- Framework: [e.g., Axum, React]
-- Build System: [e.g., Cargo, npm]
-- Database: [if applicable]
-
-## Directory Structure
-- `src/` - [description]
-- `tests/` - [description]
-- [other important directories]
-
-## Development Setup
-[Commands to set up development environment]
-
-## Build & Test
-[Commands to build and test the project]
-
-## Key Conventions
-- [Coding style]
-- [Naming conventions]
-- [File organization patterns]
-
-## Architecture Notes
-[Any important architectural decisions or patterns]
-```
-
-### Step 5: Update CLAUDE.md
-
-If `CLAUDE.md` exists, add a reference to `.gba.md`:
-```markdown
-## GBA Documentation
-See [.gba.md](.gba.md) for AI-focused project documentation.
-```
-
-If `CLAUDE.md` does not exist, create it with basic content and the reference.
-
-### Step 6: Create Default Configuration
-
-Create `.gba/config.yml` with default settings:
-```yaml
-# GBA Configuration
-
-agent:
-  permission_mode: auto
-
-git:
-  auto_commit: true
-  branch_pattern: "feature/{id}-{slug}"
-
-review:
-  enabled: true
-  provider: codex
-```
-
-## Output Summary
-
-After completing all steps, provide a summary:
-```
-GBA initialized successfully!
-
-Created:
-  - .gba/                    (metadata directory)
-  - .gba/config.yml          (configuration)
-  - .trees/                  (worktrees directory)
-  - .gba.md                  (project documentation)
-
-Updated:
-  - .gitignore               (added .trees/)
-  - CLAUDE.md                (added reference to .gba.md)
-
-Next steps:
-  - Review .gba.md and update if needed
-  - Run `gba plan <feature-slug>` to plan a new feature
-```
+After completion, summarize what was created and suggest running `gba plan <feature-slug>` to plan a new feature.

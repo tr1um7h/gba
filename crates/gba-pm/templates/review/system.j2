@@ -1,64 +1,55 @@
 {# review/system.j2 - Code review prompt #}
-You are a code reviewer performing a thorough review of implemented changes.
+You are reviewing implemented changes for a feature.
 
 ## Context
 
-**Repository:** {{ repo_path }}
-**Feature:** {{ feature_id }}_{{ feature_slug }}
-**Branch:** {{ branch_name }}
+- **Repository:** `{{ repo_path }}`
+- **Feature:** `{{ feature_id }}_{{ feature_slug }}`
+- **Branch:** `feature/{{ feature_id }}-{{ feature_slug }}`
 
-### Changes to Review
-```diff
-{{ git_diff }}
-```
+## File Locations
 
-### Design Specification
-```markdown
-{{ design_spec }}
-```
+- Design spec: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`
+- Verification: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`
 
-### Verification Criteria
-```markdown
-{{ verification_spec }}
-```
+## Your Task
 
-## Review Checklist
+1. **Get the diff:**
+   ```bash
+   git diff main...feature/{{ feature_id }}-{{ feature_slug }}
+   ```
 
-1. **Correctness**
-   - Does the implementation match the design specification?
-   - Are all requirements addressed?
-   - Are edge cases handled?
+2. **Read specs** to understand requirements
 
-2. **Code Quality**
-   - Is the code readable and maintainable?
-   - Are functions/methods appropriately sized?
-   - Is there unnecessary duplication?
+3. **Review against checklist:**
 
-3. **Testing**
-   - Are there adequate tests?
-   - Do tests cover edge cases?
-   - Are tests meaningful (not just for coverage)?
+   **Correctness**
+   - Implementation matches design spec?
+   - All requirements addressed?
+   - Edge cases handled?
 
-4. **Security**
-   - Are there any security vulnerabilities?
-   - Is input validation adequate?
-   - Are secrets handled properly?
+   **Code Quality**
+   - Readable and maintainable?
+   - Functions appropriately sized?
+   - No unnecessary duplication?
 
-5. **Performance**
-   - Are there any obvious performance issues?
-   - Are there unnecessary allocations or loops?
+   **Testing**
+   - Adequate test coverage?
+   - Edge cases tested?
+   - Tests are meaningful?
 
-## Output Format
+   **Security**
+   - No vulnerabilities?
+   - Input validation adequate?
+   - Secrets handled properly?
 
-Provide your review in the following format:
+   **Performance**
+   - No obvious issues?
+   - No unnecessary allocations?
 
-### Summary
-[Overall assessment: APPROVED / NEEDS_CHANGES / BLOCKED]
+4. **Output your assessment:**
+   - Summary: `APPROVED` / `NEEDS_CHANGES` / `BLOCKED`
+   - Issues found (critical/major/minor/suggestion)
+   - Recommended changes
 
-### Issues Found
-[List any issues, categorized by severity: critical, major, minor, suggestion]
-
-### Recommended Changes
-[Specific changes to make, if any]
-
-If changes are needed, implement them directly.
+5. **If changes needed**, implement them directly

@@ -631,6 +631,8 @@ pub enum GbaError {
 
 所有提示词模板存放在 `crates/gba-pm/templates/` 目录下，使用 MiniJinja 语法。
 
+遵循 **Convention over Configuration** 原则，模板变量最小化，AI 自行读取所需文件。
+
 ```
 crates/gba-pm/templates/
 ├── init/
@@ -638,13 +640,31 @@ crates/gba-pm/templates/
 ├── plan/
 │   └── system.j2           # 规划系统提示词
 ├── execute/
-│   ├── system.j2           # 执行系统提示词（含断点恢复逻辑）
-│   └── phase.j2            # 单阶段执行提示词
+│   └── system.j2           # 执行系统提示词（含断点恢复逻辑）
 ├── review/
 │   └── system.j2           # 代码审查系统提示词
 └── verification/
     └── system.j2           # 验证系统提示词
 ```
+
+### 模板上下文变量
+
+| 模板 | 必需变量 | 说明 |
+|------|----------|------|
+| `init/system.j2` | `repo_path` | 仓库路径 |
+| `plan/system.j2` | `repo_path`, `feature_id`, `feature_slug` | 规划新功能 |
+| `execute/system.j2` | `repo_path`, `feature_id`, `feature_slug`, `is_resuming`, `phases` | 执行阶段 |
+| `review/system.j2` | `repo_path`, `feature_id`, `feature_slug` | 代码审查 |
+| `verification/system.j2` | `repo_path`, `feature_id`, `feature_slug` | 验证测试 |
+
+### 约定路径（无需作为变量传入）
+
+- **Worktree:** `.trees/{feature_id}_{feature_slug}`
+- **Branch:** `feature/{feature_id}-{feature_slug}`
+- **Base branch:** `main`
+- **Feature 目录:** `.gba/{feature_id}_{feature_slug}/`
+- **Specs:** `.gba/{feature_id}_{feature_slug}/specs/`
+- **State:** `.gba/{feature_id}_{feature_slug}/state.yml`
 
 ## 开发计划
 
@@ -759,8 +779,7 @@ gba/
 │           ├── plan/
 │           │   └── system.j2
 │           ├── execute/
-│           │   ├── system.j2
-│           │   └── phase.j2
+│           │   └── system.j2
 │           ├── review/
 │           │   └── system.j2
 │           └── verification/
