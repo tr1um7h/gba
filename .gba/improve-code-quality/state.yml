@@ -1,0 +1,67 @@
+feature:
+  id: '0002'
+  slug: improve-code-quality
+  createdAt: 2026-01-25T23:02:13.515465Z
+  updatedAt: 2026-01-25T23:29:39.472727Z
+status: inProgress
+currentPhase: 3
+git:
+  worktreePath: .trees/improve-code-quality
+  branch: feature/0002-improve-code-quality
+  baseBranch: master
+phases:
+- name: dry-fixes
+  status: completed
+  startedAt: 2026-01-25T23:02:18.398756Z
+  completedAt: 2026-01-25T23:09:43.679704Z
+  commitSha: 13c4699
+  stats:
+    turns: 79
+    inputTokens: 8313
+    outputTokens: 20354
+    costUsd: 4.3910540000000005
+- name: srp-improvements
+  status: completed
+  startedAt: 2026-01-25T23:09:43.679910Z
+  completedAt: 2026-01-25T23:19:33.375688Z
+  commitSha: 3c10517
+  stats:
+    turns: 67
+    inputTokens: 58
+    outputTokens: 37209
+    costUsd: 4.8820862499999995
+- name: event-handler-isp
+  status: completed
+  startedAt: 2026-01-25T23:19:33.375909Z
+  completedAt: 2026-01-25T23:23:16.822424Z
+  commitSha: 2c5d9b6
+  stats:
+    turns: 44
+    inputTokens: 162
+    outputTokens: 12727
+    costUsd: 1.7759225000000003
+- name: test-improvements
+  status: completed
+  startedAt: 2026-01-25T23:23:16.822639Z
+  completedAt: 2026-01-25T23:29:39.472727Z
+  commitSha: 8b3960d
+  stats:
+    turns: 38
+    inputTokens: 35
+    outputTokens: 29338
+    costUsd: 2.76079925
+totalStats:
+  turns: 228
+  inputTokens: 8568
+  outputTokens: 99628
+  costUsd: 13.809862
+result:
+  merged: false
+  review:
+    status: passed
+    iterations: 1
+    completedAt: 2026-01-25T23:31:39.038883Z
+  verification:
+    status: passed
+    iterations: 1
+    completedAt: 2026-01-25T23:33:45.571052Z
