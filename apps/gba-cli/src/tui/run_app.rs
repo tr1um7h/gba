@@ -35,6 +35,20 @@ use super::progress::{PhaseDisplayStatus, PhaseInfo};
 /// Spinner frames for loading animation.
 const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+/// Truncate a string to a maximum number of characters, respecting UTF-8 boundaries.
+///
+/// If the string has more characters than `max_chars`, it is truncated and "..."
+/// is appended. Otherwise, the original string is returned.
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{}...", truncated)
+    }
+}
+
 /// Type of check being performed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckType {
@@ -391,11 +405,7 @@ impl RunApp {
                 self.streaming_content.push_str(&text);
                 // Update activity with first line of latest text (truncated for display)
                 let first_line = text.lines().next().unwrap_or(&text);
-                let display_text = if first_line.len() > 60 {
-                    format!("{}...", &first_line[..57])
-                } else {
-                    first_line.to_string()
-                };
+                let display_text = truncate_chars(first_line, 60);
                 if !display_text.trim().is_empty() {
                     self.activity = display_text;
                 }
@@ -1303,5 +1313,49 @@ mod tests {
         // PR created = 90% + 10% = 100%
         app.execution_stage = ExecutionStage::Done;
         assert_eq!(app.progress_percent(), 100);
+    }
+
+    #[test]
+    fn test_truncate_chars_short_string() {
+        assert_eq!(truncate_chars("hello", 10), "hello");
+        assert_eq!(truncate_chars("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_chars_long_string() {
+        let long_str = "abcdefghij";
+        assert_eq!(truncate_chars(long_str, 8), "abcde...");
+    }
+
+    #[test]
+    fn test_truncate_chars_chinese() {
+        // Chinese characters should be handled correctly
+        let chinese = "你好世界这是一个测试";
+        assert_eq!(truncate_chars(chinese, 10), "你好世界这是一个测试");
+        // Truncate to 8 chars: 5 chars + "..." = 8
+        assert_eq!(truncate_chars(chinese, 8), "你好世界这...");
+    }
+
+    #[test]
+    fn test_truncate_chars_mixed() {
+        let mixed = "Hello你好World世界";
+        assert_eq!(truncate_chars(mixed, 20), "Hello你好World世界");
+        // 13 chars total, truncate to 10: 7 chars + "..." = 10 display
+        assert_eq!(truncate_chars(mixed, 10), "Hello你好...");
+    }
+
+    #[test]
+    fn test_truncate_chars_empty() {
+        assert_eq!(truncate_chars("", 10), "");
+    }
+
+    #[test]
+    fn test_truncate_chars_edge_cases() {
+        // Exactly at boundary
+        assert_eq!(truncate_chars("abc", 3), "abc");
+        // Very short max_chars
+        assert_eq!(truncate_chars("hello", 4), "h...");
+        // max_chars is 3 (just "...")
+        assert_eq!(truncate_chars("hello", 3), "...");
     }
 }

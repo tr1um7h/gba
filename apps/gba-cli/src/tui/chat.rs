@@ -57,7 +57,7 @@ impl<'a> ChatWidget<'a> {
     /// Prepare lines for rendering.
     fn prepare_lines(&mut self, width: u16) {
         self.rendered_lines.clear();
-        let wrap_width = width.saturating_sub(4) as usize; // Account for prefix
+        let base_width = width.saturating_sub(2) as usize; // Account for borders
 
         for message in self.messages {
             let (prefix, style) = match message.role {
@@ -76,9 +76,13 @@ impl<'a> ChatWidget<'a> {
                 ),
             };
 
+            // Calculate wrap width based on prefix display width
+            let prefix_width = prefix.width();
+            let wrap_width = base_width.saturating_sub(prefix_width).max(20);
+
             // Wrap the content
             let content = &message.content;
-            let wrapped = wrap(content, wrap_width.max(20));
+            let wrapped = wrap(content, wrap_width);
 
             let mut first_line = true;
             for line_content in wrapped {
@@ -88,8 +92,8 @@ impl<'a> ChatWidget<'a> {
                         Span::styled(line_content.to_string(), style),
                     ])
                 } else {
-                    // Indent continuation lines
-                    let indent = " ".repeat(prefix.len());
+                    // Indent continuation lines using display width
+                    let indent = " ".repeat(prefix_width);
                     Line::from(vec![
                         Span::raw(indent),
                         Span::styled(line_content.to_string(), style),

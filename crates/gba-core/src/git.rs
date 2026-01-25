@@ -87,6 +87,29 @@ impl GitRepo {
         &self.workdir
     }
 
+    /// Create a git command configured for this repository.
+    ///
+    /// Sets `current_dir` to the workdir and configures the environment for proper
+    /// isolation. This clears git environment variables (like `GIT_INDEX_FILE`,
+    /// `GIT_DIR`) that might be set by parent processes (e.g., during pre-commit hooks),
+    /// and sets `GIT_CEILING_DIRECTORIES` to prevent discovering parent repositories.
+    fn git_cmd(&self) -> Command {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(&self.workdir);
+        // Clear git environment variables that could interfere with our operations.
+        // This is crucial when running inside git hooks where these are set.
+        cmd.env_remove("GIT_DIR");
+        cmd.env_remove("GIT_WORK_TREE");
+        cmd.env_remove("GIT_INDEX_FILE");
+        cmd.env_remove("GIT_OBJECT_DIRECTORY");
+        cmd.env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
+        // Prevent git from walking up to find parent repos
+        if let Some(parent) = self.workdir.parent() {
+            cmd.env("GIT_CEILING_DIRECTORIES", parent);
+        }
+        cmd
+    }
+
     // === Branch Operations ===
 
     /// Get the current branch name.
@@ -106,8 +129,8 @@ impl GitRepo {
     /// # Ok::<(), gba_core::EngineError>(())
     /// ```
     pub fn current_branch(&self) -> Result<String> {
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
+        let output = self
+            .git_cmd()
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .output()
             .map_err(|e| EngineError::git_error(format!("failed to execute git: {e}")))?;
@@ -144,8 +167,8 @@ impl GitRepo {
     /// ```
     pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
         let flag = if force { "-D" } else { "-d" };
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
+        let output = self
+            .git_cmd()
             .args(["branch", flag, name])
             .output()
             .map_err(|e| EngineError::git_error(format!("failed to execute git: {e}")))?;
@@ -176,10 +199,7 @@ impl GitRepo {
     /// ```
     pub fn detect_default_branch(&self) -> String {
         // Try to detect from remote
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
-            .args(["remote", "show", "origin"])
-            .output();
+        let output = self.git_cmd().args(["remote", "show", "origin"]).output();
 
         if let Ok(output) = output
             && output.status.success()
@@ -195,8 +215,8 @@ impl GitRepo {
         }
 
         // Fallback: check if main or master exists
-        let branches = Command::new("git")
-            .current_dir(&self.workdir)
+        let branches = self
+            .git_cmd()
             .args(["branch", "--list", "main", "master"])
             .output();
 
@@ -238,8 +258,8 @@ impl GitRepo {
     /// # Ok::<(), gba_core::EngineError>(())
     /// ```
     pub fn create_worktree(&self, path: &Path, branch: &str) -> Result<()> {
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
+        let output = self
+            .git_cmd()
             .args(["worktree", "add", "-b", branch])
             .arg(path)
             .output()
@@ -283,8 +303,8 @@ impl GitRepo {
         }
         args.push(path);
 
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
+        let output = self
+            .git_cmd()
             .args(&args)
             .output()
             .map_err(|e| EngineError::git_error(format!("failed to execute git: {e}")))?;
@@ -322,8 +342,8 @@ impl GitRepo {
     /// # Ok::<(), gba_core::EngineError>(())
     /// ```
     pub fn head_short_sha(&self) -> Result<Option<String>> {
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
+        let output = self
+            .git_cmd()
             .args(["rev-parse", "--short", "HEAD"])
             .output()
             .map_err(|e| EngineError::git_error(format!("failed to execute git: {e}")))?;
@@ -370,8 +390,8 @@ impl GitRepo {
     /// # Ok::<(), gba_core::EngineError>(())
     /// ```
     pub fn add(&self, path: &str) -> Result<()> {
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
+        let output = self
+            .git_cmd()
             .args(["add", path])
             .output()
             .map_err(|e| EngineError::git_error(format!("failed to execute git: {e}")))?;
@@ -407,8 +427,8 @@ impl GitRepo {
     /// # Ok::<(), gba_core::EngineError>(())
     /// ```
     pub fn commit(&self, message: &str) -> Result<()> {
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
+        let output = self
+            .git_cmd()
             .args(["commit", "-m", message])
             .output()
             .map_err(|e| EngineError::git_error(format!("failed to execute git: {e}")))?;
@@ -439,8 +459,8 @@ impl GitRepo {
     /// # Ok::<(), gba_core::EngineError>(())
     /// ```
     pub fn push(&self) -> Result<()> {
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
+        let output = self
+            .git_cmd()
             .args(["push"])
             .output()
             .map_err(|e| EngineError::git_error(format!("failed to execute git: {e}")))?;
@@ -552,10 +572,20 @@ mod tests {
     use super::*;
 
     /// Helper to run a git command in an isolated temp repo.
-    /// Uses `GIT_CEILING_DIRECTORIES` to prevent discovery of parent repos.
+    ///
+    /// Clears git environment variables that might be set by parent processes
+    /// (e.g., during pre-commit hooks) and sets `GIT_CEILING_DIRECTORIES`
+    /// to prevent discovery of parent repos.
     fn git_cmd(temp_dir: &TempDir) -> Command {
         let mut cmd = Command::new("git");
         cmd.current_dir(temp_dir.path());
+        // Clear git environment variables that could interfere with test isolation.
+        // This is crucial when tests run inside git hooks.
+        cmd.env_remove("GIT_DIR");
+        cmd.env_remove("GIT_WORK_TREE");
+        cmd.env_remove("GIT_INDEX_FILE");
+        cmd.env_remove("GIT_OBJECT_DIRECTORY");
+        cmd.env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
         // Prevent git from walking up to find parent repos
         if let Some(parent) = temp_dir.path().parent() {
             cmd.env("GIT_CEILING_DIRECTORIES", parent);
