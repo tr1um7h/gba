@@ -220,6 +220,7 @@ impl MessageProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::{ErrorHandler, LifecycleHandler, TextHandler, ToolHandler};
     use claude_agent_sdk_rs::{
         AssistantMessage, AssistantMessageInner, ContentBlock, Message, ResultMessage, TextBlock,
         ToolResultBlock, ToolUseBlock, UserMessage,
@@ -236,11 +237,13 @@ mod tests {
         complete_called: bool,
     }
 
-    impl EventHandler for CollectingHandler {
+    impl TextHandler for CollectingHandler {
         fn on_text(&mut self, text: &str) {
             self.texts.push(text.to_string());
         }
+    }
 
+    impl ToolHandler for CollectingHandler {
         fn on_tool_use(&mut self, tool: &str, input: &serde_json::Value) {
             self.tool_uses.push((tool.to_string(), input.clone()));
         }
@@ -248,15 +251,21 @@ mod tests {
         fn on_tool_result(&mut self, result: &str) {
             self.tool_results.push(result.to_string());
         }
+    }
 
+    impl ErrorHandler for CollectingHandler {
         fn on_error(&mut self, error: &str) {
             self.errors.push(error.to_string());
         }
+    }
 
+    impl LifecycleHandler for CollectingHandler {
         fn on_complete(&mut self) {
             self.complete_called = true;
         }
     }
+
+    // EventHandler is automatically implemented via blanket impl
 
     fn create_assistant_message_msg(content: Vec<ContentBlock>) -> Message {
         Message::Assistant(AssistantMessage {

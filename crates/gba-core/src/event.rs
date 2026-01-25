@@ -1,50 +1,74 @@
 //! Event handling for streaming responses.
 //!
-//! This module provides the [`EventHandler`] trait for handling streaming events
-//! from Claude, and a default [`PrintEventHandler`] implementation that outputs
-//! events to stdout.
+//! This module provides focused event handler traits following the Interface
+//! Segregation Principle (ISP), allowing clients to implement only the handlers
+//! they need.
+//!
+//! # Trait Hierarchy
+//!
+//! The event handling system is split into focused traits:
+//!
+//! - [`TextHandler`] - Handle text content from Claude
+//! - [`ToolHandler`] - Handle tool usage and results
+//! - [`ErrorHandler`] - Handle errors during streaming
+//! - [`LifecycleHandler`] - Handle response lifecycle events
+//! - [`EventHandler`] - Super-trait combining all handlers
 //!
 //! # Example
 //!
 //! ```
-//! use gba_core::event::{EventHandler, PrintEventHandler};
+//! use gba_core::event::{EventHandler, PrintEventHandler, TextHandler, ToolHandler};
 //!
 //! // Use the default print handler
 //! let mut handler = PrintEventHandler::default();
 //!
-//! // Or implement your own
-//! struct MyHandler;
-//! impl EventHandler for MyHandler {
+//! // Or implement only the traits you need
+//! struct TextOnlyHandler;
+//! impl TextHandler for TextOnlyHandler {
+//!     fn on_text(&mut self, text: &str) {
+//!         println!("{}", text);
+//!     }
+//! }
+//!
+//! // Implement all traits for full EventHandler support
+//! use gba_core::event::{ErrorHandler, LifecycleHandler};
+//!
+//! struct FullHandler;
+//! impl TextHandler for FullHandler {
 //!     fn on_text(&mut self, text: &str) {
 //!         // Custom text handling
 //!     }
+//! }
+//! impl ToolHandler for FullHandler {
 //!     fn on_tool_use(&mut self, tool: &str, input: &serde_json::Value) {
 //!         // Custom tool use handling
 //!     }
 //!     fn on_tool_result(&mut self, result: &str) {
 //!         // Custom tool result handling
 //!     }
+//! }
+//! impl ErrorHandler for FullHandler {
 //!     fn on_error(&mut self, error: &str) {
 //!         // Custom error handling
 //!     }
+//! }
+//! impl LifecycleHandler for FullHandler {
 //!     fn on_complete(&mut self) {
 //!         // Custom completion handling
 //!     }
 //! }
+//! // EventHandler is automatically implemented via blanket impl
 //! ```
 
 use std::io::{self, Write};
 
 use tracing::{debug, error, trace};
 
-/// Event handler trait for streaming responses.
+/// Handler for text content from Claude.
 ///
-/// Implement this trait to handle streaming events from Claude during
-/// task execution or interactive sessions.
-///
-/// All methods have default no-op implementations, allowing you to
-/// override only the events you care about.
-pub trait EventHandler: Send {
+/// Implement this trait to process text as it streams from Claude.
+/// The default implementation is a no-op.
+pub trait TextHandler: Send {
     /// Called when text content is received from Claude.
     ///
     /// # Arguments
@@ -53,7 +77,13 @@ pub trait EventHandler: Send {
     fn on_text(&mut self, text: &str) {
         let _ = text;
     }
+}
 
+/// Handler for tool usage events.
+///
+/// Implement this trait to monitor tool invocations and their results.
+/// The default implementations are no-ops.
+pub trait ToolHandler: Send {
     /// Called when Claude starts using a tool.
     ///
     /// # Arguments
@@ -72,7 +102,13 @@ pub trait EventHandler: Send {
     fn on_tool_result(&mut self, result: &str) {
         let _ = result;
     }
+}
 
+/// Handler for errors during streaming.
+///
+/// Implement this trait to handle error events.
+/// The default implementation is a no-op.
+pub trait ErrorHandler: Send {
     /// Called when an error occurs during streaming.
     ///
     /// # Arguments
@@ -81,10 +117,49 @@ pub trait EventHandler: Send {
     fn on_error(&mut self, error: &str) {
         let _ = error;
     }
+}
 
+/// Handler for response lifecycle events.
+///
+/// Implement this trait to react to lifecycle events like completion.
+/// The default implementation is a no-op.
+pub trait LifecycleHandler: Send {
     /// Called when the response is complete.
     fn on_complete(&mut self) {}
 }
+
+/// Combined event handler trait for streaming responses.
+///
+/// This trait is a super-trait that combines all focused handler traits:
+/// [`TextHandler`], [`ToolHandler`], [`ErrorHandler`], and [`LifecycleHandler`].
+///
+/// You don't need to implement this trait directly - it's automatically
+/// implemented for any type that implements all four sub-traits via blanket
+/// implementation.
+///
+/// # Example
+///
+/// ```
+/// use gba_core::event::{
+///     TextHandler, ToolHandler, ErrorHandler, LifecycleHandler, EventHandler
+/// };
+///
+/// struct MyHandler;
+///
+/// impl TextHandler for MyHandler {}
+/// impl ToolHandler for MyHandler {}
+/// impl ErrorHandler for MyHandler {}
+/// impl LifecycleHandler for MyHandler {}
+///
+/// // EventHandler is automatically implemented!
+/// fn use_handler(handler: &mut dyn EventHandler) {
+///     handler.on_text("Hello");
+/// }
+/// ```
+pub trait EventHandler: TextHandler + ToolHandler + ErrorHandler + LifecycleHandler {}
+
+/// Blanket implementation of EventHandler for any type implementing all sub-traits.
+impl<T> EventHandler for T where T: TextHandler + ToolHandler + ErrorHandler + LifecycleHandler {}
 
 /// Simple event handler that prints to stdout.
 ///
@@ -134,7 +209,7 @@ impl PrintEventHandler {
     }
 }
 
-impl EventHandler for PrintEventHandler {
+impl TextHandler for PrintEventHandler {
     fn on_text(&mut self, text: &str) {
         print!("{text}");
         if self.auto_flush {
@@ -142,7 +217,9 @@ impl EventHandler for PrintEventHandler {
         }
         trace!(text_len = text.len(), "received text");
     }
+}
 
+impl ToolHandler for PrintEventHandler {
     fn on_tool_use(&mut self, tool: &str, input: &serde_json::Value) {
         if self.show_tools {
             println!("\n[Tool: {tool}]");
@@ -164,17 +241,23 @@ impl EventHandler for PrintEventHandler {
         }
         trace!(result_len = result.len(), "tool result received");
     }
+}
 
+impl ErrorHandler for PrintEventHandler {
     fn on_error(&mut self, error_msg: &str) {
         eprintln!("\nError: {error_msg}");
         error!(error = error_msg, "streaming error");
     }
+}
 
+impl LifecycleHandler for PrintEventHandler {
     fn on_complete(&mut self) {
         println!();
         debug!("response complete");
     }
 }
+
+// EventHandler is automatically implemented via blanket impl
 
 /// Event handler that collects text into a buffer.
 ///
@@ -237,11 +320,13 @@ impl CollectingEventHandler {
     }
 }
 
-impl EventHandler for CollectingEventHandler {
+impl TextHandler for CollectingEventHandler {
     fn on_text(&mut self, text: &str) {
         self.text.push_str(text);
     }
+}
 
+impl ToolHandler for CollectingEventHandler {
     fn on_tool_use(&mut self, tool: &str, _input: &serde_json::Value) {
         self.tools_used.push(tool.to_string());
     }
@@ -249,15 +334,21 @@ impl EventHandler for CollectingEventHandler {
     fn on_tool_result(&mut self, _result: &str) {
         // No-op for collecting handler
     }
+}
 
+impl ErrorHandler for CollectingEventHandler {
     fn on_error(&mut self, _error: &str) {
         self.has_error = true;
     }
+}
 
+impl LifecycleHandler for CollectingEventHandler {
     fn on_complete(&mut self) {
         // No-op for collecting handler
     }
 }
+
+// EventHandler is automatically implemented via blanket impl
 
 #[cfg(test)]
 mod tests {
@@ -331,7 +422,11 @@ mod tests {
     // Test that default trait implementation compiles
     struct NoOpHandler;
 
-    impl EventHandler for NoOpHandler {}
+    impl TextHandler for NoOpHandler {}
+    impl ToolHandler for NoOpHandler {}
+    impl ErrorHandler for NoOpHandler {}
+    impl LifecycleHandler for NoOpHandler {}
+    // EventHandler is automatically implemented via blanket impl
 
     #[test]
     fn test_should_allow_no_op_handler() {
@@ -341,6 +436,40 @@ mod tests {
         handler.on_text("test");
         handler.on_tool_use("tool", &json!({}));
         handler.on_tool_result("result");
+        handler.on_error("error");
+        handler.on_complete();
+    }
+
+    // Test that partial implementations work (ISP)
+    struct TextOnlyHandler {
+        text: String,
+    }
+
+    impl TextHandler for TextOnlyHandler {
+        fn on_text(&mut self, text: &str) {
+            self.text.push_str(text);
+        }
+    }
+
+    #[test]
+    fn test_should_allow_partial_implementation() {
+        let mut handler = TextOnlyHandler {
+            text: String::new(),
+        };
+
+        handler.on_text("Hello ");
+        handler.on_text("World!");
+
+        assert_eq!(handler.text, "Hello World!");
+    }
+
+    // Test that EventHandler can be used as a trait object
+    #[test]
+    fn test_should_work_as_trait_object() {
+        let mut handler: Box<dyn EventHandler> = Box::new(CollectingEventHandler::new());
+
+        handler.on_text("test");
+        handler.on_tool_use("tool", &json!({}));
         handler.on_error("error");
         handler.on_complete();
     }

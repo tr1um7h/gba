@@ -25,7 +25,7 @@ use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap};
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use gba_core::event::EventHandler;
+use gba_core::event::{ErrorHandler, LifecycleHandler, TextHandler, ToolHandler};
 
 use crate::error::CliError;
 use crate::state::{FeatureState, PhaseStatus};
@@ -1049,7 +1049,7 @@ impl TuiEventHandler {
     }
 }
 
-impl EventHandler for TuiEventHandler {
+impl TextHandler for TuiEventHandler {
     fn on_text(&mut self, text: &str) {
         // Ensure text ends with newline for readability
         let text = if text.ends_with('\n') {
@@ -1059,7 +1059,9 @@ impl EventHandler for TuiEventHandler {
         };
         let _ = self.tx.try_send(RunMessage::Text(text));
     }
+}
 
+impl ToolHandler for TuiEventHandler {
     fn on_tool_use(&mut self, tool: &str, _input: &serde_json::Value) {
         debug!(tool = tool, "tool use during execution");
     }
@@ -1067,15 +1069,21 @@ impl EventHandler for TuiEventHandler {
     fn on_tool_result(&mut self, _result: &str) {
         // No-op
     }
+}
 
+impl ErrorHandler for TuiEventHandler {
     fn on_error(&mut self, error: &str) {
         let _ = self.tx.try_send(RunMessage::Error(error.to_string()));
     }
+}
 
+impl LifecycleHandler for TuiEventHandler {
     fn on_complete(&mut self) {
         debug!("execution streaming complete");
     }
 }
+
+// EventHandler is automatically implemented via blanket impl
 
 #[cfg(test)]
 mod tests {

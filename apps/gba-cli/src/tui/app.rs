@@ -831,7 +831,7 @@ impl ChannelEventHandler {
     }
 }
 
-impl gba_core::event::EventHandler for ChannelEventHandler {
+impl gba_core::event::TextHandler for ChannelEventHandler {
     fn on_text(&mut self, text: &str) {
         // Ensure text ends with newline for readability
         let text = if text.ends_with('\n') {
@@ -842,7 +842,9 @@ impl gba_core::event::EventHandler for ChannelEventHandler {
         // Use try_send to avoid blocking
         let _ = self.tx.try_send(WorkerMessage::Text(text));
     }
+}
 
+impl gba_core::event::ToolHandler for ChannelEventHandler {
     fn on_tool_use(&mut self, tool: &str, _input: &serde_json::Value) {
         debug!(tool = tool, "tool use in TUI session");
     }
@@ -850,15 +852,21 @@ impl gba_core::event::EventHandler for ChannelEventHandler {
     fn on_tool_result(&mut self, _result: &str) {
         // No-op for TUI
     }
+}
 
+impl gba_core::event::ErrorHandler for ChannelEventHandler {
     fn on_error(&mut self, error: &str) {
         let _ = self.tx.try_send(WorkerMessage::Error(error.to_string()));
     }
+}
 
+impl gba_core::event::LifecycleHandler for ChannelEventHandler {
     fn on_complete(&mut self) {
         debug!("TUI streaming complete");
     }
 }
+
+// EventHandler is automatically implemented via blanket impl
 
 #[cfg(test)]
 mod tests {
