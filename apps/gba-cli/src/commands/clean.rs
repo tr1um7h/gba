@@ -273,14 +273,8 @@ fn clean_worktree(workdir: &Path, wt: &WorktreeInfo) -> Result<(), CliError> {
         }
     }
 
-    // Also clean up the .gba feature directory
-    let gba_feature_dir = workdir.join(".gba").join(&wt.slug);
-    if gba_feature_dir.exists() {
-        println!("  Removing .gba/{}/", wt.slug);
-        if let Err(e) = std::fs::remove_dir_all(&gba_feature_dir) {
-            warn!("failed to remove .gba/{}: {}", wt.slug, e);
-        }
-    }
+    // Note: We keep .gba/<feature>/ directory for feature history
+    info!("keeping .gba/{}/ for feature history", wt.slug);
 
     Ok(())
 }
