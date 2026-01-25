@@ -39,8 +39,8 @@ pub fn is_initialized(workdir: &Path) -> bool {
 
 /// Find a feature directory by slug.
 ///
-/// Searches the `.gba/` directory for a feature matching the given slug.
-/// The feature directory name format is `<id>_<slug>`.
+/// Searches the `.trees/{slug}/.gba/{slug}/` directory for state.yml.
+/// Returns the path to the feature's state directory.
 ///
 /// # Errors
 ///
@@ -48,60 +48,23 @@ pub fn is_initialized(workdir: &Path) -> bool {
 /// - GBA is not initialized
 /// - No matching feature is found
 pub fn find_feature_dir(workdir: &Path, slug: &str) -> Result<PathBuf, CliError> {
-    let gba = gba_dir(workdir);
-    if !gba.exists() {
+    if !is_initialized(workdir) {
         return Err(CliError::NotInitialized);
     }
 
-    let entries = fs::read_dir(&gba)
-        .map_err(|e| CliError::Io(format!("failed to read {}: {}", gba.display(), e)))?;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir()
-            && let Some(name) = path.file_name().and_then(|n| n.to_str())
-            && name.contains('_')
-        {
-            // Check if this directory matches the slug pattern: <id>_<slug>
-            let parts: Vec<&str> = name.splitn(2, '_').collect();
-            if parts.len() == 2 && parts[1] == slug {
-                return Ok(path);
-            }
-        }
+    // Feature state is at .trees/{slug}/.gba/{slug}/state.yml
+    let feature_dir = trees_dir(workdir).join(slug).join(GBA_DIR).join(slug);
+    if feature_dir.join("state.yml").exists() {
+        return Ok(feature_dir);
     }
 
     Err(CliError::FeatureNotFound(slug.to_string()))
 }
 
-/// Parse feature ID from a directory name.
+/// List all feature directories in the trees directory.
 ///
-/// Given a directory name like `0001_add-auth`, returns `Some("0001")`.
-#[must_use]
-pub fn parse_feature_id(dir_name: &str) -> Option<&str> {
-    if dir_name.contains('_') {
-        let parts: Vec<&str> = dir_name.splitn(2, '_').collect();
-        if parts.len() == 2 {
-            return Some(parts[0]);
-        }
-    }
-    None
-}
-
-/// Parse feature slug from a directory name.
-///
-/// Given a directory name like `0001_add-auth`, returns `Some("add-auth")`.
-#[must_use]
-pub fn parse_feature_slug(dir_name: &str) -> Option<&str> {
-    if dir_name.contains('_') {
-        let parts: Vec<&str> = dir_name.splitn(2, '_').collect();
-        if parts.len() == 2 {
-            return Some(parts[1]);
-        }
-    }
-    None
-}
-
-/// List all feature directories in the GBA directory.
+/// Scans `.trees/` for worktrees and returns paths to feature state directories.
+/// Each feature is at `.trees/{slug}/.gba/{slug}/`.
 ///
 /// # Errors
 ///
@@ -109,34 +72,41 @@ pub fn parse_feature_slug(dir_name: &str) -> Option<&str> {
 /// - GBA is not initialized
 /// - Cannot read the directory
 pub fn list_feature_dirs(workdir: &Path) -> Result<Vec<PathBuf>, CliError> {
-    let gba = gba_dir(workdir);
-    if !gba.exists() {
+    if !is_initialized(workdir) {
         return Err(CliError::NotInitialized);
     }
 
-    let entries = fs::read_dir(&gba)
-        .map_err(|e| CliError::Io(format!("failed to read {}: {}", gba.display(), e)))?;
+    let trees = trees_dir(workdir);
+    if !trees.exists() {
+        return Ok(Vec::new());
+    }
+
+    let entries = fs::read_dir(&trees)
+        .map_err(|e| CliError::Io(format!("failed to read {}: {}", trees.display(), e)))?;
 
     let mut feature_dirs = Vec::new();
     for entry in entries.flatten() {
-        let path = entry.path();
-        // Feature directories contain an underscore (e.g., 0001_slug)
-        if path.is_dir()
-            && let Some(name) = path.file_name().and_then(|n| n.to_str())
-            && name.contains('_')
-            && path.join("state.yml").exists()
+        let worktree_path = entry.path();
+        if worktree_path.is_dir()
+            && let Some(slug) = worktree_path.file_name().and_then(|n| n.to_str())
         {
-            feature_dirs.push(path);
+            // Feature state is at .trees/{slug}/.gba/{slug}/state.yml
+            let feature_dir = worktree_path.join(GBA_DIR).join(slug);
+            if feature_dir.join("state.yml").exists() {
+                feature_dirs.push(feature_dir);
+            }
         }
     }
 
-    // Sort by directory name (which includes ID prefix)
+    // Sort by directory name
     feature_dirs.sort();
 
     Ok(feature_dirs)
 }
 
 /// Generate the next feature ID based on existing features.
+///
+/// Reads feature IDs from state.yml files in each worktree.
 ///
 /// # Errors
 ///
@@ -146,10 +116,8 @@ pub fn next_feature_id(workdir: &Path) -> Result<String, CliError> {
 
     let max_id = feature_dirs
         .iter()
-        .filter_map(|p| p.file_name())
-        .filter_map(|n| n.to_str())
-        .filter_map(parse_feature_id)
-        .filter_map(|id| id.parse::<u32>().ok())
+        .filter_map(|dir| FeatureState::load(dir).ok())
+        .filter_map(|state| state.feature.id.parse::<u32>().ok())
         .max()
         .unwrap_or(0);
 
@@ -212,25 +180,6 @@ pub fn load_feature_state(workdir: &Path, slug: &str) -> Result<FeatureState, Cl
 mod tests {
     use super::*;
     use std::time::Duration;
-
-    #[test]
-    fn test_parse_feature_id() {
-        assert_eq!(parse_feature_id("0001_add-auth"), Some("0001"));
-        assert_eq!(parse_feature_id("0123_my-feature"), Some("0123"));
-        assert_eq!(parse_feature_id("invalid"), None);
-        assert_eq!(parse_feature_id(""), None);
-    }
-
-    #[test]
-    fn test_parse_feature_slug() {
-        assert_eq!(parse_feature_slug("0001_add-auth"), Some("add-auth"));
-        assert_eq!(parse_feature_slug("0123_my-feature"), Some("my-feature"));
-        assert_eq!(
-            parse_feature_slug("0001_slug_with_underscore"),
-            Some("slug_with_underscore")
-        );
-        assert_eq!(parse_feature_slug("invalid"), None);
-    }
 
     #[test]
     fn test_format_duration() {

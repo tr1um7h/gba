@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::error::CliError;
 use crate::state::FeatureState;
-use crate::utils::{format_cost, is_initialized, list_feature_dirs, parse_feature_id};
+use crate::utils::{format_cost, is_initialized, list_feature_dirs};
 
 /// Run the `gba list` command.
 ///
@@ -44,8 +44,10 @@ pub async fn run_list(workdir: &Path) -> Result<()> {
     println!("{}", "-".repeat(70));
 
     for dir in &feature_dirs {
-        let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let id = parse_feature_id(dir_name).unwrap_or("????");
+        let slug = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
 
         match FeatureState::load(dir) {
             Ok(state) => {
@@ -66,14 +68,14 @@ pub async fn run_list(workdir: &Path) -> Result<()> {
 
                 println!(
                     "{:<6} {:<30} {:<12} {:<10} {:<10}",
-                    id, state.feature.slug, status_str, progress, cost
+                    state.feature.id, state.feature.slug, status_str, progress, cost
                 );
             }
             Err(e) => {
                 debug!(error = %e, dir = %dir.display(), "Failed to load feature state");
                 println!(
                     "{:<6} {:<30} {:<12} {:<10} {:<10}",
-                    id, dir_name, "error", "-", "-"
+                    "????", slug, "error", "-", "-"
                 );
             }
         }

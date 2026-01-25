@@ -120,8 +120,7 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     }
 
     // Verify worktree exists
-    let worktree_path =
-        trees_dir(workdir).join(format!("{}_{}", state.feature.id, state.feature.slug));
+    let worktree_path = trees_dir(workdir).join(&state.feature.slug);
     if !worktree_path.exists() {
         return Err(CliError::InvalidState(format!(
             "worktree not found: {}",
@@ -134,8 +133,8 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     state.feature.updated_at = Utc::now();
     state.save(&feature_dir)?;
 
-    // Create engine
-    let engine = create_engine(workdir)?;
+    // Create engine with worktree as working directory
+    let engine = create_engine(workdir, &worktree_path)?;
 
     // Execute phases
     let result = execute_phases(
@@ -304,11 +303,16 @@ fn detect_resume_point(state: &FeatureState) -> usize {
     state.phases.len().saturating_sub(1)
 }
 
-/// Create the GBA engine.
+/// Create the GBA engine with worktree as working directory.
 ///
 /// The `PromptManager` only contains owned data (templates loaded from files),
 /// so it can safely be `'static`. No unsafe code is needed.
-fn create_engine(workdir: &Path) -> Result<Engine<'static>, CliError> {
+///
+/// # Arguments
+///
+/// * `workdir` - Main repository working directory (for loading tasks)
+/// * `worktree_path` - Worktree path to use as the engine's working directory
+fn create_engine(workdir: &Path, worktree_path: &Path) -> Result<Engine<'static>, CliError> {
     let tasks_dir = workdir.join("tasks");
 
     if !tasks_dir.exists() {
@@ -321,8 +325,9 @@ fn create_engine(workdir: &Path) -> Result<Engine<'static>, CliError> {
     let mut prompts = PromptManager::new();
     prompts.load_dir(&tasks_dir)?;
 
+    // Use worktree as working directory for the engine
     let config = EngineConfig::builder()
-        .workdir(workdir)
+        .workdir(worktree_path)
         .prompts(prompts)
         .build();
 
@@ -361,6 +366,8 @@ async fn execute_phases(
         state.save(feature_dir)?;
 
         // Build context for the execute task
+        // Note: worktree_path is derived from workdir + slug
+        let worktree_path = trees_dir(workdir).join(&state.feature.slug);
         let phases_context: Vec<serde_json::Value> = state
             .phases
             .iter()
@@ -374,7 +381,7 @@ async fn execute_phases(
             .collect();
 
         let context = json!({
-            "repo_path": workdir.display().to_string(),
+            "repo_path": worktree_path.display().to_string(),
             "feature_id": state.feature.id,
             "feature_slug": state.feature.slug,
             "is_resuming": is_resuming && phase_idx == start_phase,
@@ -433,8 +440,7 @@ async fn execute_phases(
 
 /// Get the latest commit SHA from the worktree.
 fn get_latest_commit_sha(workdir: &Path, state: &FeatureState) -> Result<Option<String>, CliError> {
-    let worktree_path =
-        trees_dir(workdir).join(format!("{}_{}", state.feature.id, state.feature.slug));
+    let worktree_path = trees_dir(workdir).join(&state.feature.slug);
 
     let output = std::process::Command::new("git")
         .current_dir(&worktree_path)
@@ -478,8 +484,7 @@ async fn run_verification(engine: &Engine<'_>, state: &FeatureState) -> Result<S
 
 /// Create a pull request using gh CLI.
 async fn create_pull_request(workdir: &Path, state: &mut FeatureState) -> Result<String, CliError> {
-    let worktree_path =
-        trees_dir(workdir).join(format!("{}_{}", state.feature.id, state.feature.slug));
+    let worktree_path = trees_dir(workdir).join(&state.feature.slug);
 
     let branch = &state.git.branch;
     let base_branch = &state.git.base_branch;
@@ -587,7 +592,7 @@ mod tests {
             status: FeatureStatus::InProgress,
             current_phase: 1,
             git: GitState {
-                worktree_path: ".trees/0001_test-feature".to_string(),
+                worktree_path: ".trees/test-feature".to_string(),
                 branch: "feature/0001-test-feature".to_string(),
                 base_branch: "main".to_string(),
             },
