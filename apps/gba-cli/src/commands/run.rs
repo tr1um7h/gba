@@ -94,8 +94,11 @@ impl CheckConfig {
                 }
             }
 
-            // Match pattern with brackets like "[APPROVED]" or "**APPROVED**"
-            if trimmed == format!("[{}]", keyword) || trimmed == format!("**{}**", keyword) {
+            // Match pattern with brackets like "[APPROVED]" or "**APPROVED**" or "`APPROVED`"
+            if trimmed == format!("[{}]", keyword)
+                || trimmed == format!("**{}**", keyword)
+                || trimmed == format!("`{}`", keyword)
+            {
                 return true;
             }
         }
@@ -1378,6 +1381,11 @@ mod tests {
     fn test_keyword_match_bracketed() {
         assert!(CheckConfig::matches_keyword("[APPROVED]", "APPROVED"));
         assert!(CheckConfig::matches_keyword("**VERIFIED**", "VERIFIED"));
+        assert!(CheckConfig::matches_keyword(
+            "`NEEDS_CHANGES`",
+            "NEEDS_CHANGES"
+        ));
+        assert!(CheckConfig::matches_keyword("`APPROVED`", "APPROVED"));
     }
 
     #[test]

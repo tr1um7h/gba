@@ -1,55 +1,93 @@
 Review the implementation for feature `{{ feature_slug }}`.
 
+## Scope
+
+**ONLY review code changes in this feature branch.** Do NOT review:
+- Existing code that was not modified
+- Unrelated files or modules
+- Code style issues already handled by linters/formatters
+
 ## Tasks
 
-1. **Get the diff:**
+1. **Get the diff** to understand what changed:
    ```bash
    git diff main...feature/{{ feature_id }}-{{ feature_slug }}
    ```
 
-2. **Read specs** to understand requirements
+2. **Read specs** to understand requirements:
+   - Design spec: `.gba/{{ feature_slug }}/specs/design.md`
+   - Verification spec: `.gba/{{ feature_slug }}/specs/verification.md`
 
-3. **Review against checklist:**
+3. **Use the codex-code-review skill** for comprehensive analysis:
+   ```
+   /codex-code-review
+   ```
 
-   **Correctness**
-   - Implementation matches design spec?
-   - All requirements addressed?
-   - Edge cases handled?
+## Review Checklist (Priority Order)
 
-   **Code Quality**
-   - Readable and maintainable?
-   - Functions appropriately sized?
-   - No unnecessary duplication?
+### 1. Architecture & Design
+- Does the implementation follow the design spec?
+- Is the module/component structure appropriate?
+- Are responsibilities clearly separated (single responsibility)?
+- Is the dependency direction correct (no circular dependencies)?
+- Are there any architectural anti-patterns?
 
-   **Testing**
-   - Adequate test coverage?
-   - Edge cases tested?
-   - Tests are meaningful?
+### 2. Data Structures & Algorithms
+- Are data structures appropriate for the use case?
+- Is data ownership clear (owned vs borrowed)?
+- Are there potential memory issues (leaks, excessive allocation)?
+- Is algorithmic complexity acceptable for expected data sizes?
 
-   **Security**
-   - No vulnerabilities?
-   - Input validation adequate?
-   - Secrets handled properly?
+### 3. Public Interfaces & APIs
+- Are public APIs intuitive and well-documented?
+- Is the API surface minimal (no unnecessary exposure)?
+- Are function signatures clear (parameter types, return types)?
+- Is error handling consistent and informative?
+- Are breaking changes documented?
 
-   **Performance**
-   - No obvious issues?
-   - No unnecessary allocations?
+### 4. Security
+- Input validation at system boundaries?
+- No injection vulnerabilities (SQL, command, XSS)?
+- Secrets handled properly (not logged, not hardcoded)?
+- Authentication/authorization checks in place?
+- Cryptographic operations correct?
 
-## Output
+### 5. Reliability & Error Handling
+- Are all error cases handled appropriately?
+- Is there proper resource cleanup (files, connections)?
+- Are there potential panics in production paths?
+- Is retry/fallback logic implemented where needed?
 
-Provide your assessment:
+### 6. Testability & Testing
+- Is the code testable (proper dependency injection)?
+- Are critical paths covered by tests?
+- Are edge cases tested?
+- Are tests meaningful (not just for coverage)?
+
+### 7. Usability & Developer Experience
+- Is the code readable and self-documenting?
+- Are complex sections commented?
+- Is logging sufficient for debugging?
+- Are error messages actionable?
+
+## Output Format
 
 ### Summary
-`APPROVED` / `NEEDS_CHANGES` / `BLOCKED`
+State ONE verdict on its own line:
+APPROVED
+NEEDS_CHANGES
+BLOCKED
 
 ### Issues Found
-List issues by severity:
-- **Critical:** Must fix before merge
-- **Major:** Should fix before merge
-- **Minor:** Nice to have
-- **Suggestion:** Consider for future
+List ONLY issues in the changed code, by severity:
+- **Critical:** Bugs, security vulnerabilities, data loss risks - MUST fix
+- **Major:** Design flaws, missing error handling - SHOULD fix
+- **Minor:** Code clarity, minor improvements - NICE to fix
 
 ### Recommended Changes
-Specific code changes needed (provide diffs or code snippets).
+For each issue, provide:
+1. File and location
+2. What's wrong
+3. How to fix (with code snippet if helpful)
 
-Note: You cannot modify files directly. Document changes for the developer to implement.
+Note: You cannot modify files. Document changes for the fix task to implement.
