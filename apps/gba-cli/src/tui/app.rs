@@ -11,10 +11,11 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use crossterm::ExecutableCommand;
+use crossterm::cursor::MoveTo;
 use crossterm::event::{self, Event, KeyEvent};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -324,10 +325,15 @@ impl App {
             .show_cursor()
             .map_err(|e| CliError::Io(format!("failed to show cursor: {}", e)))?;
 
-        // Clear the terminal to ensure clean output after TUI
+        // Reset cursor position and clear screen to ensure clean output after TUI
         terminal
-            .clear()
-            .map_err(|e| CliError::Io(format!("failed to clear terminal: {}", e)))?;
+            .backend_mut()
+            .execute(MoveTo(0, 0))
+            .map_err(|e| CliError::Io(format!("failed to move cursor: {}", e)))?;
+        terminal
+            .backend_mut()
+            .execute(Clear(ClearType::FromCursorDown))
+            .map_err(|e| CliError::Io(format!("failed to clear screen: {}", e)))?;
 
         result
     }
