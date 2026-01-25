@@ -3,18 +3,22 @@
 //! This module implements the execution pipeline for a planned feature,
 //! including phase execution, auto-commit, code review, verification,
 //! and PR creation with resume support.
+//!
+//! The execution uses a TUI to display progress with streaming output
+//! that clears between phases (not accumulates).
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use gba_core::event::PrintEventHandler;
 use gba_core::{Engine, Task, TaskKind};
 use serde_json::json;
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::error::CliError;
-use crate::state::{FeatureState, FeatureStatus, PhaseStatus};
+use crate::state::{FeatureState, FeatureStatus, PhaseStatus, TaskStats};
+use crate::tui::{RunApp, RunMessage, TuiEventHandler};
 use crate::utils;
 
 /// Maximum number of fix iterations for review and verification loops.
@@ -336,15 +340,34 @@ struct PreparedExecution {
     is_resuming: bool,
 }
 
+/// Context for TUI-based phase execution.
+struct TuiExecutionContext {
+    /// Path to the working directory.
+    workdir: PathBuf,
+    /// Task context with worktree path.
+    ctx: TaskContext,
+    /// Path to the feature directory.
+    feature_dir: PathBuf,
+    /// Starting phase index.
+    start_phase: usize,
+    /// Whether this is a resume operation.
+    is_resuming: bool,
+    /// Dry run mode (no commits or pushes).
+    dry_run: bool,
+}
+
 /// Execute a planned feature.
 ///
 /// This function orchestrates the full execution pipeline:
 /// 1. Load and validate feature state
 /// 2. Detect resume point or start fresh
-/// 3. Execute remaining phases with auto-commit
+/// 3. Execute remaining phases with auto-commit (shown in TUI)
 /// 4. Run code review
 /// 5. Run verification
 /// 6. Create pull request
+///
+/// The phase execution uses a TUI to display progress with streaming output
+/// that clears between phases for better readability.
 ///
 /// # Errors
 ///
@@ -373,25 +396,48 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     state.feature.updated_at = Utc::now();
     state.save(&feature_dir)?;
 
-    // Create engine with worktree as working directory
-    let engine = utils::create_engine_with_context(workdir, &ctx.worktree_path)?;
+    // Create channel for TUI messages
+    let (tx, rx) = mpsc::channel::<RunMessage>(100);
 
-    // Execute phases
-    let phase_result = execute_phases(
-        &engine,
-        &ctx,
-        &feature_dir,
-        &mut state,
+    // Create TUI app from current state
+    let mut app = RunApp::new(&state);
+
+    // Capture dry_run before moving into exec_ctx
+    let dry_run = options.dry_run;
+
+    // Create execution context for the worker task
+    let exec_ctx = TuiExecutionContext {
+        workdir: workdir.to_path_buf(),
+        ctx: ctx.clone(),
+        feature_dir: feature_dir.clone(),
         start_phase,
         is_resuming,
-        options.dry_run,
-    )
-    .await;
+        dry_run,
+    };
 
-    if let Err(e) = phase_result {
+    // Spawn execution worker
+    let worker_handle =
+        tokio::spawn(async move { execute_phases_with_tui(exec_ctx, state, tx).await });
+
+    // Run TUI event loop (blocks until complete or error)
+    app.run(rx).await?;
+
+    // Wait for worker and get updated state
+    let worker_result = worker_handle
+        .await
+        .map_err(|e| CliError::InvalidState(format!("worker task panicked: {}", e)))?;
+
+    let (mut state, phase_result) = worker_result?;
+
+    // Handle phase execution failure
+    if let Err(ref e) = phase_result {
         save_failed_state(&mut state, &feature_dir, &e.to_string())?;
-        return Err(e);
     }
+
+    phase_result?;
+
+    // Create engine for review and verification (non-TUI, non-streaming)
+    let engine = utils::create_engine_with_context(workdir, &ctx.worktree_path)?;
 
     // Run review and verification
     if let Err(reason) = run_review_and_verification(&engine, &ctx, &mut state, &feature_dir).await
@@ -401,9 +447,184 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     }
 
     // Finalize execution (create PR and print summary)
-    finalize_execution(&ctx, &mut state, &feature_dir, options.dry_run).await?;
+    finalize_execution(&ctx, &mut state, &feature_dir, dry_run).await?;
 
     Ok(())
+}
+
+/// Execute phases with TUI integration.
+///
+/// This function runs in a spawned task and sends `RunMessage` events
+/// to the TUI via the provided channel.
+///
+/// Returns the updated state and the result of phase execution.
+async fn execute_phases_with_tui(
+    exec_ctx: TuiExecutionContext,
+    mut state: FeatureState,
+    tx: mpsc::Sender<RunMessage>,
+) -> Result<(FeatureState, Result<(), CliError>), CliError> {
+    let TuiExecutionContext {
+        workdir,
+        ctx,
+        feature_dir,
+        start_phase,
+        is_resuming,
+        dry_run,
+    } = exec_ctx;
+
+    // Create engine with worktree as working directory
+    let engine = utils::create_engine_with_context(&workdir, &ctx.worktree_path)?;
+
+    let total_phases = state.phases.len();
+
+    for phase_idx in start_phase..total_phases {
+        let phase_name = state.phases[phase_idx].name.clone();
+
+        // Send phase started message to TUI
+        if tx
+            .send(RunMessage::PhaseStarted {
+                index: phase_idx,
+                name: phase_name.clone(),
+            })
+            .await
+            .is_err()
+        {
+            // TUI closed, abort execution
+            return Ok((
+                state,
+                Err(CliError::InvalidState("TUI channel closed".to_string())),
+            ));
+        }
+
+        // Mark phase as in progress
+        state.current_phase = phase_idx;
+        state.phases[phase_idx].status = PhaseStatus::InProgress;
+        state.phases[phase_idx].started_at = Some(Utc::now());
+        state.feature.updated_at = Utc::now();
+        state.save(&feature_dir)?;
+
+        // Build context for the execute task
+        let phases_context: Vec<serde_json::Value> = state
+            .phases
+            .iter()
+            .map(|p| {
+                json!({
+                    "name": p.name,
+                    "status": format!("{}", p.status),
+                    "commit_sha": p.commit_sha,
+                })
+            })
+            .collect();
+
+        let mut context = ctx.base_context();
+        if let Some(obj) = context.as_object_mut() {
+            obj.insert(
+                "is_resuming".to_string(),
+                json!(is_resuming && phase_idx == start_phase),
+            );
+            obj.insert("current_phase_index".to_string(), json!(phase_idx));
+            obj.insert("current_phase_name".to_string(), json!(phase_name.clone()));
+            obj.insert("total_phases".to_string(), json!(total_phases));
+            obj.insert("phases".to_string(), json!(phases_context));
+        }
+
+        // Create and run the execute task with TUI event handler
+        let task = Task::new(TaskKind::Execute, context);
+        let mut handler = TuiEventHandler::new(tx.clone());
+
+        let result = engine.run_stream(task, &mut handler).await;
+
+        match result {
+            Ok(result) => {
+                if !result.success {
+                    // Send phase failed message
+                    let error_msg = format!("phase '{}' execution failed", phase_name);
+                    let _ = tx
+                        .send(RunMessage::PhaseFailed {
+                            index: phase_idx,
+                            error: error_msg.clone(),
+                        })
+                        .await;
+
+                    state.phases[phase_idx].status = PhaseStatus::Failed;
+                    state.feature.updated_at = Utc::now();
+                    state.save(&feature_dir)?;
+
+                    // Send complete signal
+                    let _ = tx.send(RunMessage::Complete).await;
+
+                    return Ok((state, Err(CliError::InvalidState(error_msg))));
+                }
+
+                // Get commit SHA if auto-commit was done
+                let commit_sha = if !dry_run {
+                    get_latest_commit_sha(&ctx)?
+                } else {
+                    None
+                };
+
+                // Update phase status
+                state.phases[phase_idx].status = PhaseStatus::Completed;
+                state.phases[phase_idx].completed_at = Some(Utc::now());
+                state.phases[phase_idx].commit_sha = commit_sha.clone();
+                state.phases[phase_idx].stats = Some(TaskStats {
+                    turns: result.stats.turns,
+                    input_tokens: result.stats.input_tokens,
+                    output_tokens: result.stats.output_tokens,
+                    cost_usd: result.stats.cost_usd,
+                });
+
+                // Update total stats
+                state.total_stats.turns += result.stats.turns;
+                state.total_stats.input_tokens += result.stats.input_tokens;
+                state.total_stats.output_tokens += result.stats.output_tokens;
+                state.total_stats.cost_usd += result.stats.cost_usd;
+
+                state.feature.updated_at = Utc::now();
+                state.save(&feature_dir)?;
+
+                // Send phase completed message
+                let _ = tx
+                    .send(RunMessage::PhaseCompleted {
+                        index: phase_idx,
+                        commit_sha,
+                    })
+                    .await;
+
+                // Send stats update
+                let _ = tx
+                    .send(RunMessage::StatsUpdate {
+                        turns: state.total_stats.turns,
+                        cost_usd: state.total_stats.cost_usd,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                // Send error to TUI
+                let error_msg = format!("phase '{}' failed: {}", phase_name, e);
+                let _ = tx
+                    .send(RunMessage::PhaseFailed {
+                        index: phase_idx,
+                        error: error_msg.clone(),
+                    })
+                    .await;
+
+                state.phases[phase_idx].status = PhaseStatus::Failed;
+                state.feature.updated_at = Utc::now();
+                state.save(&feature_dir)?;
+
+                // Send complete signal
+                let _ = tx.send(RunMessage::Complete).await;
+
+                return Ok((state, Err(CliError::from(e))));
+            }
+        }
+    }
+
+    // All phases completed successfully
+    let _ = tx.send(RunMessage::Complete).await;
+
+    Ok((state, Ok(())))
 }
 
 /// Prepare execution by validating state and computing context.
@@ -669,111 +890,6 @@ fn detect_resume_point(state: &FeatureState) -> usize {
 
     // All phases complete, return the last phase index
     state.phases.len().saturating_sub(1)
-}
-
-/// Execute the remaining phases.
-async fn execute_phases(
-    engine: &Engine<'_>,
-    ctx: &TaskContext,
-    feature_dir: &Path,
-    state: &mut FeatureState,
-    start_phase: usize,
-    is_resuming: bool,
-    dry_run: bool,
-) -> Result<(), CliError> {
-    let total_phases = state.phases.len();
-
-    for phase_idx in start_phase..total_phases {
-        let phase_name = state.phases[phase_idx].name.clone();
-
-        println!();
-        println!(
-            "[{}/{}] Executing phase: {}",
-            phase_idx + 1,
-            total_phases,
-            phase_name
-        );
-
-        // Mark phase as in progress
-        state.current_phase = phase_idx;
-        state.phases[phase_idx].status = PhaseStatus::InProgress;
-        state.phases[phase_idx].started_at = Some(Utc::now());
-        state.feature.updated_at = Utc::now();
-        state.save(feature_dir)?;
-
-        // Build context for the execute task
-        let phases_context: Vec<serde_json::Value> = state
-            .phases
-            .iter()
-            .map(|p| {
-                json!({
-                    "name": p.name,
-                    "status": format!("{}", p.status),
-                    "commit_sha": p.commit_sha,
-                })
-            })
-            .collect();
-
-        let mut context = ctx.base_context();
-        if let Some(obj) = context.as_object_mut() {
-            obj.insert(
-                "is_resuming".to_string(),
-                json!(is_resuming && phase_idx == start_phase),
-            );
-            obj.insert("current_phase_index".to_string(), json!(phase_idx));
-            obj.insert("current_phase_name".to_string(), json!(phase_name));
-            obj.insert("total_phases".to_string(), json!(total_phases));
-            obj.insert("phases".to_string(), json!(phases_context));
-        }
-
-        // Create and run the execute task
-        let task = Task::new(TaskKind::Execute, context);
-        let mut handler = PrintEventHandler::new().with_auto_flush();
-
-        let result = engine.run_stream(task, &mut handler).await?;
-
-        if !result.success {
-            state.phases[phase_idx].status = PhaseStatus::Failed;
-            state.feature.updated_at = Utc::now();
-            state.save(feature_dir)?;
-
-            return Err(CliError::InvalidState(format!(
-                "phase '{}' execution failed",
-                phase_name
-            )));
-        }
-
-        // Get commit SHA if auto-commit was done
-        let commit_sha = if !dry_run {
-            get_latest_commit_sha(ctx)?
-        } else {
-            None
-        };
-
-        // Update phase status
-        state.phases[phase_idx].status = PhaseStatus::Completed;
-        state.phases[phase_idx].completed_at = Some(Utc::now());
-        state.phases[phase_idx].commit_sha = commit_sha;
-        state.phases[phase_idx].stats = Some(crate::state::TaskStats {
-            turns: result.stats.turns,
-            input_tokens: result.stats.input_tokens,
-            output_tokens: result.stats.output_tokens,
-            cost_usd: result.stats.cost_usd,
-        });
-
-        // Update total stats
-        state.total_stats.turns += result.stats.turns;
-        state.total_stats.input_tokens += result.stats.input_tokens;
-        state.total_stats.output_tokens += result.stats.output_tokens;
-        state.total_stats.cost_usd += result.stats.cost_usd;
-
-        state.feature.updated_at = Utc::now();
-        state.save(feature_dir)?;
-
-        println!("[✓] Phase '{}' completed", phase_name);
-    }
-
-    Ok(())
 }
 
 /// Get the latest commit SHA from the worktree.
