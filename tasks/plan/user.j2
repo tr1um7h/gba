@@ -78,7 +78,7 @@ current_phase: 0
 git:
   worktree_path: ".trees/{{ feature_slug }}"
   branch: "feature/{{ feature_id }}-{{ feature_slug }}"
-  base_branch: "main"
+  base_branch: "{{ base_branch }}"
 phases:
   - name: "phase-1"
     status: pending

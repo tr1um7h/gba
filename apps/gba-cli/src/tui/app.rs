@@ -254,10 +254,12 @@ impl App {
             .map_err(|e| CliError::Io(format!("failed to draw: {}", e)))?;
 
         // Create session with plan task configuration
+        let base_branch = utils::detect_default_branch(&self.workdir);
         let context = json!({
             "repo_path": self.workdir.display().to_string(),
             "feature_id": self.feature_id,
             "feature_slug": self.feature_slug,
+            "base_branch": base_branch,
         });
 
         let mut session = engine

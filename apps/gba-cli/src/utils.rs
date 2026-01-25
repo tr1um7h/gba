@@ -5,6 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use gba_core::{Engine, EngineConfig};
 use gba_pm::PromptManager;
@@ -78,6 +79,55 @@ pub fn feature_exists(workdir: &Path, slug: &str) -> bool {
 #[must_use]
 pub fn is_initialized(workdir: &Path) -> bool {
     gba_dir(workdir).join("config.yml").exists()
+}
+
+/// Detect the default branch of the repository.
+///
+/// Tries to get the default branch from the remote origin.
+/// Falls back to "main" if detection fails.
+#[must_use]
+pub fn detect_default_branch(workdir: &Path) -> String {
+    // Try to get the default branch from origin
+    let output = Command::new("git")
+        .args(["remote", "show", "origin"])
+        .current_dir(workdir)
+        .output();
+
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if line.contains("HEAD branch:")
+                && let Some(branch) = line.split(':').nth(1)
+            {
+                let branch = branch.trim();
+                if !branch.is_empty() {
+                    return branch.to_string();
+                }
+            }
+        }
+    }
+
+    // Fallback: check if master or main branch exists locally
+    let output = Command::new("git")
+        .args(["branch", "--list", "master", "main"])
+        .current_dir(workdir)
+        .output();
+
+    if let Ok(output) = output {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Prefer master if it exists (for backward compatibility)
+        if stdout.contains("master") {
+            return "master".to_string();
+        }
+        if stdout.contains("main") {
+            return "main".to_string();
+        }
+    }
+
+    // Default fallback
+    "main".to_string()
 }
 
 /// Find a feature directory by slug.
