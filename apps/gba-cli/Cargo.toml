@@ -30,6 +30,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 
 chrono = { version = "0.4", features = ["serde"] }
 textwrap = "0.16"

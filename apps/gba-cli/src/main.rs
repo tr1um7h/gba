@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use tracing::Level;
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer, fmt};
 
 mod cli;
 mod commands;
@@ -26,26 +28,14 @@ use cli::{Cli, Command};
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Setup tracing based on verbose flag
-    let level = if cli.verbose {
-        Level::DEBUG
-    } else {
-        Level::INFO
-    };
-
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(level)
-        .with_target(false)
-        .with_thread_ids(false)
-        .without_time()
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-
-    // Determine working directory
+    // Determine working directory early for log file location
     let workdir = cli
         .workdir
+        .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    // Setup logging with file output
+    setup_logging(&workdir, cli.verbose);
 
     // Dispatch to command handler
     match cli.command {
@@ -77,4 +67,38 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Setup logging with console (WARN level) and file (INFO level) outputs.
+///
+/// Logs are written to `.gba/logs/gba.log` in the working directory.
+/// The file appender uses daily rotation.
+fn setup_logging(workdir: &std::path::Path, verbose: bool) {
+    // Console layer: WARN by default, DEBUG if verbose
+    let console_level = if verbose { Level::DEBUG } else { Level::WARN };
+    let console_layer = fmt::layer()
+        .with_target(false)
+        .with_thread_ids(false)
+        .without_time()
+        .with_filter(EnvFilter::from_default_env().add_directive(console_level.into()));
+
+    // File layer: always INFO level for diagnostics
+    let log_dir = workdir.join(".gba").join("logs");
+    if std::fs::create_dir_all(&log_dir).is_ok() {
+        let file_appender = tracing_appender::rolling::daily(&log_dir, "gba.log");
+        let file_layer = fmt::layer()
+            .with_target(true)
+            .with_thread_ids(false)
+            .with_ansi(false)
+            .with_writer(file_appender)
+            .with_filter(EnvFilter::from_default_env().add_directive(Level::INFO.into()));
+
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(file_layer)
+            .init();
+    } else {
+        // Fall back to console-only logging if we can't create log directory
+        tracing_subscriber::registry().with(console_layer).init();
+    }
 }
