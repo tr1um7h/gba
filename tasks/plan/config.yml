@@ -1,4 +1,6 @@
 # GBA Plan Task Configuration
 preset: true
 tools: []              # empty = all tools allowed
-disallowedTools: []    # empty = no restrictions
+disallowedTools:
+  - Edit               # Plan mode should NOT edit existing files
+  - NotebookEdit       # Plan mode should NOT edit notebooks

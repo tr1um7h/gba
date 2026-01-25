@@ -36,11 +36,23 @@ Step 5: After approval #2, create state.yml (this triggers exit)
 
 ## Restrictions
 
+**File Creation Rules:**
+- You may ONLY create files inside `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/`
+- Allowed files: `specs/design.md`, `specs/verification.md`, `state.yml`
+- You may ONLY run `git worktree add` command for setup
+- **NEVER** create or modify any other files
+
+**What You Must NOT Do:**
 - DO NOT write implementation code
-- DO NOT modify source files
-- ONLY use Read/Glob/Grep to understand codebase
-- Keep designs SHORT and focused
+- DO NOT create source files (.rs, .ts, .py, etc.)
+- DO NOT modify existing files (Edit tool is disabled)
+- DO NOT create files outside of `.gba/` directory
 - **NEVER** create state.yml before receiving TWO user approvals
+
+**What You CAN Do:**
+- Use Read/Glob/Grep to understand codebase
+- Discuss design with user
+- Create spec files in `.gba/` after approval
 
 ## Approval Keywords
 

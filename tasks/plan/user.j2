@@ -102,3 +102,8 @@ Then say: "Plan finished. Run `gba run {{ feature_slug }}` to execute."
 3. **NEVER skip approvals** - wait for explicit "approved" from user
 4. **NEVER create state.yml early** - only after BOTH approvals received
 5. **Use EXACT state.yml format** - the nested structure above is required
+6. **ONLY create files in `.gba/`** - you may ONLY create:
+   - `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/design.md`
+   - `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/verification.md`
+   - `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/state.yml`
+   - NO other files allowed
