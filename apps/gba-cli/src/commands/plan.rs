@@ -6,10 +6,14 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use chrono::Utc;
+use tracing::info;
 
 use crate::error::CliError;
-use crate::state::FeatureState;
+use crate::state::{
+    FeatureInfo, FeatureResult, FeatureState, FeatureStatus, GitState, PhaseState, PhaseStatus,
+    TaskStats,
+};
 use crate::tui::App;
 use crate::utils;
 
@@ -56,20 +60,33 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     // Create the engine
     let engine = utils::create_engine(workdir)?;
 
+    // Detect base branch
+    let base_branch = utils::detect_default_branch(workdir);
+    info!(base_branch = %base_branch, "detected base branch");
+
     // Launch TUI
-    let mut app = App::new(slug.to_string(), feature_id.clone(), workdir);
+    let mut app = App::new(
+        slug.to_string(),
+        feature_id.clone(),
+        base_branch.clone(),
+        workdir,
+    );
 
     println!("Starting interactive planning session...");
     println!("Press Ctrl+C to exit at any time.");
     println!();
 
-    // Run the TUI and get the result
-    let result = app.run(&engine).await.context("TUI error")?;
+    // Run the TUI
+    app.run(&engine).await.context("TUI error")?;
 
-    // Process result
-    if let Some(state) = result {
-        // Planning completed - verify artifacts created by Claude
-        verify_feature_artifacts(workdir, &state)?;
+    // Check if specs were created and approved
+    let specs_dir = utils::feature_specs_dir(workdir, slug);
+    let design_exists = specs_dir.join("design.md").exists();
+    let verification_exists = specs_dir.join("verification.md").exists();
+
+    if design_exists && verification_exists {
+        // Generate state.yml
+        let state = generate_state(workdir, slug, &feature_id, &base_branch)?;
 
         println!();
         println!("Planning completed!");
@@ -78,57 +95,112 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
         println!("Worktree: {}", state.git.worktree_path);
         println!("Branch: {}", state.git.branch);
         println!();
-        println!(
-            "Run `gba run {}` to execute the implementation.",
-            state.feature.slug
-        );
+        println!("Run `gba run {}` to execute the implementation.", slug);
     } else {
-        // Check if state.yml exists but couldn't be parsed
-        let state_file = utils::feature_state_file(workdir, slug);
-        if state_file.exists() {
-            eprintln!();
-            eprintln!("Error: state.yml exists but has invalid format.");
-            eprintln!("File: {}", state_file.display());
-            eprintln!();
-            eprintln!("Please check that state.yml matches the expected YAML structure.");
-            eprintln!("You may need to manually fix or delete it and run `gba plan` again.");
-        } else {
-            println!();
-            println!("Planning session cancelled.");
-        }
+        println!();
+        println!("Planning session cancelled.");
     }
 
     Ok(())
 }
 
-/// Verify feature artifacts exist after planning completes.
-///
-/// The worktree, specs, and state.yml are created by Claude during planning.
-/// This function just verifies they exist.
-fn verify_feature_artifacts(workdir: &Path, state: &FeatureState) -> Result<()> {
-    let slug = &state.feature.slug;
+/// Generate state.yml after specs are approved.
+fn generate_state(
+    workdir: &Path,
+    slug: &str,
+    feature_id: &str,
+    base_branch: &str,
+) -> Result<FeatureState, CliError> {
+    let now = Utc::now();
 
-    // Verify worktree exists
-    let worktree_path = utils::feature_worktree_path(workdir, slug);
-    if !worktree_path.exists() {
-        warn!(
-            worktree = %worktree_path.display(),
-            "worktree not found - may need manual creation"
-        );
-    } else {
-        info!(worktree = %worktree_path.display(), "worktree verified");
+    // Read design.md to extract phases
+    let specs_dir = utils::feature_specs_dir(workdir, slug);
+    let design_content = std::fs::read_to_string(specs_dir.join("design.md")).unwrap_or_default();
+
+    // Extract phases from design.md
+    let phases = extract_phases_from_design(&design_content);
+
+    let state = FeatureState {
+        feature: FeatureInfo {
+            id: feature_id.to_string(),
+            slug: slug.to_string(),
+            created_at: now,
+            updated_at: now,
+        },
+        status: FeatureStatus::Planned,
+        current_phase: 0,
+        git: GitState {
+            worktree_path: format!(".trees/{}", slug),
+            branch: format!("feature/{}-{}", feature_id, slug),
+            base_branch: base_branch.to_string(),
+        },
+        phases,
+        total_stats: TaskStats::default(),
+        result: FeatureResult::default(),
+        error: None,
+    };
+
+    // Save state.yml
+    let feature_dir = utils::feature_gba_dir(workdir, slug);
+    state.save(&feature_dir)?;
+
+    info!(
+        state_file = %feature_dir.join("state.yml").display(),
+        "state.yml generated"
+    );
+
+    Ok(state)
+}
+
+/// Extract phase information from design.md content.
+fn extract_phases_from_design(content: &str) -> Vec<PhaseState> {
+    let mut phases = Vec::new();
+
+    // Look for patterns like "## Phase 1:", "## 1.", "### Phase:", etc.
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            let text = trimmed.trim_start_matches('#').trim();
+            // Check for phase-like patterns
+            if text.to_lowercase().starts_with("phase")
+                || text.chars().next().is_some_and(|c| c.is_ascii_digit())
+            {
+                // Extract a reasonable phase name
+                let name = text
+                    .split(':')
+                    .next()
+                    .unwrap_or(text)
+                    .trim()
+                    .to_lowercase()
+                    .replace(' ', "-");
+
+                if !name.is_empty() && name.len() < 50 {
+                    phases.push(PhaseState {
+                        name,
+                        status: PhaseStatus::Pending,
+                        started_at: None,
+                        completed_at: None,
+                        commit_sha: None,
+                        stats: None,
+                    });
+                }
+            }
+        }
     }
 
-    // Verify state.yml exists
-    let state_file = utils::feature_state_file(workdir, slug);
-    if !state_file.exists() {
-        warn!(
-            state_file = %state_file.display(),
-            "state.yml not found"
-        );
+    // If no phases found, create a default one
+    if phases.is_empty() {
+        phases.push(PhaseState {
+            name: "implementation".to_string(),
+            status: PhaseStatus::Pending,
+            started_at: None,
+            completed_at: None,
+            commit_sha: None,
+            stats: None,
+        });
     }
 
-    Ok(())
+    phases
 }
 
 #[cfg(test)]

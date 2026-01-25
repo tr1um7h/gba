@@ -30,7 +30,6 @@ use tracing::{debug, info, warn};
 use gba_core::{Engine, Session, TaskKind};
 
 use crate::error::CliError;
-use crate::state::FeatureState;
 use crate::utils;
 
 use super::chat::ChatWidget;
@@ -152,6 +151,8 @@ pub struct App {
     feature_slug: String,
     /// Feature ID (e.g., "0001").
     feature_id: String,
+    /// Base branch for the feature.
+    base_branch: String,
     /// Channel to send requests to worker.
     request_tx: Option<mpsc::Sender<RequestMessage>>,
     /// Current session stats (updated by worker).
@@ -162,8 +163,7 @@ pub struct App {
     waiting: bool,
     /// Current phase of planning.
     phase: PlanPhase,
-    /// Working directory path (reserved for future use).
-    #[allow(dead_code)]
+    /// Working directory path.
     workdir: std::path::PathBuf,
     /// Total lines in chat (for scroll calculation).
     total_chat_lines: u16,
@@ -178,6 +178,7 @@ impl std::fmt::Debug for App {
         f.debug_struct("App")
             .field("feature_slug", &self.feature_slug)
             .field("feature_id", &self.feature_id)
+            .field("base_branch", &self.base_branch)
             .field("messages_count", &self.messages.len())
             .field("input_len", &self.input.len())
             .field("phase", &self.phase)
@@ -195,11 +196,18 @@ impl App {
     ///
     /// * `feature_slug` - The slug identifier for the feature
     /// * `feature_id` - The feature ID (e.g., "0001")
+    /// * `base_branch` - The base branch for the feature
     /// * `workdir` - Working directory path
-    pub fn new(feature_slug: String, feature_id: String, workdir: &Path) -> Self {
+    pub fn new(
+        feature_slug: String,
+        feature_id: String,
+        base_branch: String,
+        workdir: &Path,
+    ) -> Self {
         debug!(
             feature_slug = %feature_slug,
             feature_id = %feature_id,
+            base_branch = %base_branch,
             "creating TUI app"
         );
 
@@ -211,6 +219,7 @@ impl App {
             scroll: 0,
             feature_slug,
             feature_id,
+            base_branch,
             request_tx: None,
             stats: SessionStats::default(),
             running: true,
@@ -231,7 +240,7 @@ impl App {
     /// # Errors
     ///
     /// Returns an error if terminal setup fails or an unrecoverable error occurs.
-    pub async fn run(&mut self, engine: &Engine<'_>) -> Result<Option<FeatureState>, CliError> {
+    pub async fn run(&mut self, engine: &Engine<'_>) -> Result<(), CliError> {
         // Setup terminal
         enable_raw_mode().map_err(|e| CliError::Io(format!("failed to enable raw mode: {}", e)))?;
         let mut stdout = io::stdout();
@@ -254,12 +263,11 @@ impl App {
             .map_err(|e| CliError::Io(format!("failed to draw: {}", e)))?;
 
         // Create session with plan task configuration
-        let base_branch = utils::detect_default_branch(&self.workdir);
         let context = json!({
             "repo_path": self.workdir.display().to_string(),
             "feature_id": self.feature_id,
             "feature_slug": self.feature_slug,
-            "base_branch": base_branch,
+            "base_branch": self.base_branch,
         });
 
         let mut session = engine
@@ -324,7 +332,7 @@ impl App {
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         mut worker_rx: mpsc::Receiver<WorkerMessage>,
-    ) -> Result<Option<FeatureState>, CliError> {
+    ) -> Result<(), CliError> {
         while self.running {
             // Draw UI
             terminal
@@ -403,29 +411,7 @@ impl App {
             }
         }
 
-        // Return feature state if planning completed
-        if self.phase == PlanPhase::Done {
-            // Try to load state from worktree (created by Claude)
-            Ok(self.load_feature_state())
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Load feature state from the worktree's state.yml file.
-    ///
-    /// Returns None if the file doesn't exist (e.g., user typed /done before completion).
-    fn load_feature_state(&self) -> Option<FeatureState> {
-        let state_dir = utils::feature_gba_dir(&self.workdir, &self.feature_slug);
-
-        match FeatureState::load(&state_dir) {
-            Ok(state) => Some(state),
-            Err(e) => {
-                // Log at warn level so user can see what went wrong
-                warn!(error = %e, "failed to load state.yml - format may be incorrect");
-                None
-            }
-        }
+        Ok(())
     }
 
     /// Handle scroll-only input while waiting for response.
@@ -491,21 +477,48 @@ impl App {
         }
     }
 
-    /// Check for phase transitions based on file existence.
+    /// Check for phase transitions based on file existence and user approval.
     ///
-    /// Instead of relying on keyword matching (unreliable), we check if
-    /// the state.yml file has been created in the worktree, which indicates
-    /// the plan is complete.
+    /// When spec files exist (design.md and verification.md) and the last user
+    /// message was an approval, we exit the TUI. The plan.rs will generate state.yml.
     fn check_phase_transition(&mut self) {
-        // Check if state.yml exists in worktree - this is the definitive completion signal
-        let state_file = utils::feature_state_file(&self.workdir, &self.feature_slug);
-
-        if state_file.exists() {
+        // Check if specs exist AND user approved
+        if self.specs_exist() && self.last_user_message_is_approval() {
             self.phase = PlanPhase::Done;
-            info!(feature_slug = %self.feature_slug, "planning completed (state.yml detected)");
-            // Auto-exit when planning is done
+            info!(feature_slug = %self.feature_slug, "specs approved, exiting TUI");
             self.running = false;
         }
+    }
+
+    /// Check if spec files exist (design.md and verification.md).
+    fn specs_exist(&self) -> bool {
+        let specs_dir = utils::feature_specs_dir(&self.workdir, &self.feature_slug);
+        let design_file = specs_dir.join("design.md");
+        let verification_file = specs_dir.join("verification.md");
+        design_file.exists() && verification_file.exists()
+    }
+
+    /// Check if the last user message was an approval.
+    fn last_user_message_is_approval(&self) -> bool {
+        let approval_keywords = [
+            "approved",
+            "approve",
+            "ok",
+            "yes",
+            "lgtm",
+            "looks good",
+            "go ahead",
+            "ship it",
+        ];
+
+        // Find the last user message
+        for msg in self.messages.iter().rev() {
+            if msg.role == MessageRole::User {
+                let lower = msg.content.to_lowercase();
+                return approval_keywords.iter().any(|kw| lower.contains(kw));
+            }
+        }
+        false
     }
 
     /// Render the TUI view.

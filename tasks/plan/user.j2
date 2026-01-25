@@ -39,8 +39,6 @@ Does this look right? Say "approved" to proceed.
 
 ⚠️ **STOP HERE and wait for user to say "approved" before continuing.**
 
-Do NOT proceed to Step 4 until user explicitly approves the design.
-
 ## Step 4: Generate Spec Files (After First Approval)
 
 ONLY after user says "approved", create spec files:
@@ -55,59 +53,18 @@ ONLY after user says "approved", create spec files:
    - How to verify each phase
    - Test cases or acceptance criteria
 
-3. Tell user: "Spec files created. Please review them and say 'approved' to finalize."
+3. Tell user: **"Spec files created. Please review and say 'approved' to finalize the plan."**
 
-⚠️ **STOP HERE and wait for user to review and say "approved" before continuing.**
+⚠️ **STOP HERE. When user approves, the system will automatically generate state.yml and exit.**
 
-Do NOT create state.yml until user explicitly approves the spec files.
-
-## Step 5: Finalize (After Second Approval)
-
-ONLY after user says "approved" for the second time, create state.yml.
-
-⚠️ **CRITICAL: You MUST use this EXACT YAML structure. The nested `feature:` block is REQUIRED.**
-
-Create file `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/state.yml` with this content:
-
-```yaml
-feature:
-  id: "{{ feature_id }}"
-  slug: "{{ feature_slug }}"
-  created_at: "2024-01-01T00:00:00Z"
-  updated_at: "2024-01-01T00:00:00Z"
-status: planned
-current_phase: 0
-git:
-  worktree_path: ".trees/{{ feature_slug }}"
-  branch: "feature/{{ feature_id }}-{{ feature_slug }}"
-  base_branch: "{{ base_branch }}"
-phases:
-  - name: "phase-1"
-    status: pending
-total_stats:
-  turns: 0
-  input_tokens: 0
-  output_tokens: 0
-  cost_usd: 0.0
-result:
-  pr_url: null
-```
-
-**DO NOT** use a flat structure like `feature_id: ...`. The `feature:` key MUST contain nested `id:`, `slug:`, `created_at:`, `updated_at:` fields.
-
-Then say: "Plan finished. Run `gba run {{ feature_slug }}` to execute."
-
-## CRITICAL RULES
+## RULES
 
 1. **Create worktree FIRST** - before any discussion
-2. **TWO approvals required** - you must receive "approved" twice:
-   - Once after presenting design in chat
-   - Once after creating spec files
+2. **TWO approvals required**:
+   - First: after presenting design in chat
+   - Second: after creating spec files
 3. **NEVER skip approvals** - wait for explicit "approved" from user
-4. **NEVER create state.yml early** - only after BOTH approvals received
-5. **Use EXACT state.yml format** - the nested structure above is required
-6. **ONLY create files in `.gba/`** - you may ONLY create:
+4. **DO NOT create state.yml** - system generates it automatically
+5. **ONLY create these files**:
    - `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/design.md`
    - `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/verification.md`
-   - `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/state.yml`
-   - NO other files allowed
