@@ -14,8 +14,8 @@ categories = ["development-tools"]
 
 [workspace.dependencies]
 # Internal crates
-gba-core = { path = "crates/gba-core" }
-gba-pm = { path = "crates/gba-pm" }
+gba-core = { version = "0.2.2", path = "crates/gba-core" }
+gba-pm = { version = "0.2.2", path = "crates/gba-pm" }
 
 # Async runtime
 tokio = { version = "1.49", features = [
