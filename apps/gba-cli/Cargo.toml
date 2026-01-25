@@ -24,7 +24,15 @@ crossterm = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+chrono = { version = "0.4", features = ["serde"] }
+textwrap = "0.16"
+
+[dev-dependencies]
+tempfile = "3.15"
