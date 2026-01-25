@@ -12,13 +12,13 @@ This creates:
 - Branch: `feature/{{ feature_id }}-{{ feature_slug }}`
 - Worktree: `.trees/{{ feature_slug }}/`
 
-All implementation code will go in this worktree.
+## Step 2: Understand & Discuss
 
-## Step 2: Understand
+1. Read `.gba.md` to understand the project
+2. Ask user what they want for this feature
+3. Clarify requirements through conversation
 
-Read `.gba.md` to understand the project, then ask user what they want.
-
-## Step 3: Propose Design IN CHAT
+## Step 3: Propose Design IN CHAT (Approval #1 Required)
 
 Write a SHORT design summary **directly in chat** (NOT a file):
 
@@ -37,11 +37,13 @@ Write a SHORT design summary **directly in chat** (NOT a file):
 Does this look right? Say "approved" to proceed.
 ```
 
-**STOP and wait for user approval.**
+⚠️ **STOP HERE and wait for user to say "approved" before continuing.**
 
-## Step 4: Generate Spec Files (after first approval)
+Do NOT proceed to Step 4 until user explicitly approves the design.
 
-When user approves the design, create spec files in the WORKTREE:
+## Step 4: Generate Spec Files (After First Approval)
+
+ONLY after user says "approved", create spec files:
 
 1. Create `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/specs/design.md`:
    - Feature overview and goals
@@ -53,45 +55,50 @@ When user approves the design, create spec files in the WORKTREE:
    - How to verify each phase
    - Test cases or acceptance criteria
 
-3. Tell user: "Spec files created in worktree. Please review them and say 'approved' to finalize."
+3. Tell user: "Spec files created. Please review them and say 'approved' to finalize."
 
-**STOP and wait for user to review and approve the spec files.**
+⚠️ **STOP HERE and wait for user to review and say "approved" before continuing.**
 
-## Step 5: Finalize (after second approval)
+Do NOT create state.yml until user explicitly approves the spec files.
 
-When user approves the spec files:
+## Step 5: Finalize (After Second Approval)
 
-1. Create `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/state.yml`:
-   ```yaml
-   feature:
-     id: "{{ feature_id }}"
-     slug: "{{ feature_slug }}"
-     created_at: "<timestamp>"
-     updated_at: "<timestamp>"
-   status: planned
-   current_phase: 0
-   git:
-     worktree_path: ".trees/{{ feature_slug }}"
-     branch: "feature/{{ feature_id }}-{{ feature_slug }}"
-     base_branch: "main"
-   phases:
-     - name: "phase-1"
-       status: pending
-   total_stats:
-     turns: 0
-     input_tokens: 0
-     output_tokens: 0
-     cost_usd: 0.0
-   result:
-     pr_url: null
-   ```
+ONLY after user says "approved" for the second time, create state.yml:
 
-2. Say: "Plan finished. Run `gba run {{ feature_slug }}` to execute."
+Create `.trees/{{ feature_slug }}/.gba/{{ feature_slug }}/state.yml` with EXACTLY this format:
 
-## RULES
+```yaml
+feature:
+  id: "{{ feature_id }}"
+  slug: "{{ feature_slug }}"
+  created_at: "<ISO8601 timestamp>"
+  updated_at: "<ISO8601 timestamp>"
+status: planned
+current_phase: 0
+git:
+  worktree_path: ".trees/{{ feature_slug }}"
+  branch: "feature/{{ feature_id }}-{{ feature_slug }}"
+  base_branch: "main"
+phases:
+  - name: "phase-1"
+    status: pending
+total_stats:
+  turns: 0
+  input_tokens: 0
+  output_tokens: 0
+  cost_usd: 0.0
+result:
+  pr_url: null
+```
 
-- **Create worktree FIRST** before any discussion
-- **TWO approvals required**: (1) design discussion, (2) spec files review
-- **All files go in worktree**: `.trees/{{ feature_slug }}/`
-- **NEVER** create state.yml before user approves spec files
-- Keep designs SHORT
+Then say: "Plan finished. Run `gba run {{ feature_slug }}` to execute."
+
+## CRITICAL RULES
+
+1. **Create worktree FIRST** - before any discussion
+2. **TWO approvals required** - you must receive "approved" twice:
+   - Once after presenting design in chat
+   - Once after creating spec files
+3. **NEVER skip approvals** - wait for explicit "approved" from user
+4. **NEVER create state.yml early** - only after BOTH approvals received
+5. **Use EXACT state.yml format** - the nested structure above is required
