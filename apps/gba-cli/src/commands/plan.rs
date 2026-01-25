@@ -62,16 +62,14 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     let engine = create_engine(workdir)?;
 
     // Launch TUI
-    let mut app = App::new(slug.to_string(), feature_id.clone(), &engine, workdir)
-        .await
-        .context("failed to create TUI app")?;
+    let mut app = App::new(slug.to_string(), feature_id.clone(), workdir);
 
     println!("Starting interactive planning session...");
     println!("Press Ctrl+C to exit at any time.");
     println!();
 
     // Run the TUI and get the result
-    let result = app.run().await.context("TUI error")?;
+    let result = app.run(&engine).await.context("TUI error")?;
 
     // Process result
     if let Some(state) = result {

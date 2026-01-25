@@ -1,56 +1,82 @@
-Plan the implementation of feature `{{ feature_slug }}`.
+Plan the feature `{{ feature_slug }}`.
 
-## Tasks
+## Step 1: Understand
 
-1. **Read project documentation** from `.gba.md` to understand the codebase
+Read `.gba.md` to understand the project, then ask user what they want.
 
-2. **Check existing features** by listing `.gba/` directory
+## Step 2: Propose Design IN CHAT
 
-3. **Discuss with user** to understand requirements:
-   - Ask clarifying questions
-   - Understand scope and constraints
-   - Identify dependencies
+Write a SHORT design summary **directly in chat** (NOT a file):
 
-4. **Design the solution** when requirements are clear:
-   - Propose implementation approach
-   - Break into phases (each independently committable)
-   - Each phase should produce working, testable code
+```
+## Design: {{ feature_slug }}
 
-5. **Generate specifications** when user approves:
-   - Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`:
-     - Feature overview
-     - Technical approach
-     - Phase breakdown with deliverables
-     - Files to change per phase
-   - Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`:
-     - Test cases
-     - Acceptance criteria
+**Goal:** <one sentence>
 
-6. **Setup git worktree:**
-   ```bash
-   git worktree add .trees/{{ feature_id }}_{{ feature_slug }} -b feature/{{ feature_id }}-{{ feature_slug }}
-   ```
+**Changes:**
+- <file>: <what changes>
 
-7. **Create initial state** at `.gba/{{ feature_id }}_{{ feature_slug }}/state.yml`:
+**Phases:**
+1. <phase 1>
+2. <phase 2>
+
+Does this look right? Say "approved" to proceed.
+```
+
+**STOP and wait for user approval.**
+
+## Step 3: Generate Spec Files (after first approval)
+
+When user approves the design:
+
+1. Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`:
+   - Feature overview and goals
+   - Technical approach
+   - Phase breakdown with deliverables
+   - Files to modify per phase
+
+2. Create `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`:
+   - How to verify each phase
+   - Test cases or acceptance criteria
+
+3. Tell user: "Spec files created. Please review them and say 'approved' to finalize."
+
+**STOP and wait for user to review and approve the spec files.**
+
+## Step 4: Finalize (after second approval)
+
+When user approves the spec files:
+
+1. Create `.gba/{{ feature_id }}_{{ feature_slug }}/state.yml`:
    ```yaml
    feature:
      id: "{{ feature_id }}"
-     slug: {{ feature_slug }}
-     created_at: <current timestamp>
+     slug: "{{ feature_slug }}"
+     created_at: "<timestamp>"
+     updated_at: "<timestamp>"
    status: planned
    current_phase: 0
    git:
-     worktree_path: .trees/{{ feature_id }}_{{ feature_slug }}
-     branch: feature/{{ feature_id }}-{{ feature_slug }}
-     base_branch: main
-   phases: <populate from design.md>
+     worktree_path: ".trees/{{ feature_id }}_{{ feature_slug }}"
+     branch: "feature/{{ feature_id }}-{{ feature_slug }}"
+     base_branch: "main"
+   phases:
+     - name: "phase-1"
+       status: pending
    total_stats:
      turns: 0
-     cost_usd: 0
+     input_tokens: 0
+     output_tokens: 0
+     cost_usd: 0.0
    result:
      pr_url: null
    ```
 
-## Output
+2. Say: "Plan finished. Run `gba run {{ feature_slug }}` to execute."
 
-When complete, inform user: "Plan finished. Run `gba run {{ feature_slug }}` to execute."
+## RULES
+
+- **TWO approvals required**: (1) design discussion, (2) spec files review
+- **NEVER** create state.yml before user approves spec files
+- **NEVER** skip the discussion phase
+- Keep designs SHORT

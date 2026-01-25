@@ -34,7 +34,8 @@ impl<'a> ChatWidget<'a> {
     /// * `messages` - The conversation messages to display
     /// * `scroll` - Current scroll position
     /// * `visible_height` - Height of the visible area
-    pub fn new(messages: &'a [ChatMessage], scroll: u16, visible_height: u16) -> Self {
+    /// * `width` - Width of the rendering area for accurate line calculation
+    pub fn new(messages: &'a [ChatMessage], scroll: u16, visible_height: u16, width: u16) -> Self {
         let mut widget = Self {
             messages,
             scroll,
@@ -42,8 +43,8 @@ impl<'a> ChatWidget<'a> {
             total_lines: 0,
             rendered_lines: Vec::new(),
         };
-        // Pre-calculate for a reasonable width (will be recalculated on render)
-        widget.prepare_lines(80);
+        // Pre-calculate with actual width for accurate scroll calculations
+        widget.prepare_lines(width);
         widget
     }
 
@@ -115,12 +116,16 @@ impl Widget for ChatWidget<'_> {
         // Recalculate lines for actual width
         self.prepare_lines(area.width);
 
-        let scroll = self.scroll as usize;
+        let total = self.rendered_lines.len();
         let visible = self.visible_height as usize;
 
+        // Clamp scroll to valid range: max_scroll ensures we can see all content
+        let max_scroll = total.saturating_sub(visible);
+        let scroll = (self.scroll as usize).min(max_scroll);
+
         // Get the lines to display based on scroll position
-        let start = scroll.min(self.rendered_lines.len());
-        let end = (start + visible).min(self.rendered_lines.len());
+        let start = scroll;
+        let end = (start + visible).min(total);
 
         for (i, (line, _style)) in self.rendered_lines[start..end].iter().enumerate() {
             let y = area.y + i as u16;
@@ -164,14 +169,14 @@ mod tests {
             create_test_message(MessageRole::Assistant, "Hi there!"),
         ];
 
-        let widget = ChatWidget::new(&messages, 0, 10);
+        let widget = ChatWidget::new(&messages, 0, 10, 80);
         assert!(widget.total_lines() > 0);
     }
 
     #[test]
     fn test_chat_widget_empty_messages() {
         let messages: Vec<ChatMessage> = vec![];
-        let widget = ChatWidget::new(&messages, 0, 10);
+        let widget = ChatWidget::new(&messages, 0, 10, 80);
         assert_eq!(widget.total_lines(), 0);
     }
 
@@ -183,7 +188,7 @@ mod tests {
             create_test_message(MessageRole::User, "Line 3"),
         ];
 
-        let widget = ChatWidget::new(&messages, 2, 10);
+        let widget = ChatWidget::new(&messages, 2, 10, 80);
         assert_eq!(widget.scroll, 2);
     }
 }

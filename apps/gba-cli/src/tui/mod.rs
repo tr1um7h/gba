@@ -18,10 +18,12 @@
 //! ```no_run
 //! use gba_cli::tui::App;
 //! use gba_core::Engine;
+//! use std::path::Path;
 //!
 //! # async fn example(engine: &Engine<'_>) -> anyhow::Result<()> {
-//! let mut app = App::new("my-feature".to_string(), engine).await?;
-//! app.run().await?;
+//! let workdir = Path::new(".");
+//! let mut app = App::new("my-feature".to_string(), "0001".to_string(), workdir);
+//! app.run(engine).await?;
 //! # Ok(())
 //! # }
 //! ```

@@ -2,6 +2,9 @@
 //!
 //! This module contains the main application struct that manages the TUI state,
 //! handles user interaction, and orchestrates the planning session.
+//!
+//! The architecture separates UI rendering from the worker that communicates
+//! with Claude. Communication happens via channels to keep the UI responsive.
 
 use std::io;
 use std::path::Path;
@@ -9,6 +12,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use crossterm::ExecutableCommand;
 use crossterm::event::{self, Event, KeyEvent};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -18,8 +22,9 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use serde_json::json;
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use gba_core::{Engine, Session, TaskKind};
@@ -33,25 +38,51 @@ use crate::state::{
 use super::chat::ChatWidget;
 use super::input::{InputAction, InputHandler};
 
+/// Spinner frames for loading animation.
+const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// Messages sent from UI to the worker.
+#[derive(Debug)]
+enum RequestMessage {
+    /// Send a message to Claude.
+    Send(String),
+    /// Shutdown the worker.
+    Shutdown,
+}
+
+/// Session statistics for display.
+#[derive(Debug, Clone, Default)]
+struct SessionStats {
+    turns: u32,
+    input_tokens: u64,
+    output_tokens: u64,
+    cost_usd: f64,
+}
+
+/// Messages sent from the worker to the UI.
+#[derive(Debug)]
+enum WorkerMessage {
+    /// Streaming text chunk from Claude.
+    Text(String),
+    /// Response complete with updated stats.
+    Complete(SessionStats),
+    /// Error occurred.
+    Error(String),
+}
+
 /// Planning phase state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanPhase {
-    /// Initial discussion with user about requirements.
-    Discussing,
-    /// User is confirming the design before spec generation.
-    ConfirmingSpec,
-    /// Agent is generating specification files.
-    GeneratingSpec,
-    /// Planning is complete.
+    /// Active planning discussion with user.
+    InProgress,
+    /// Planning is complete (state.yml created or user typed /done).
     Done,
 }
 
 impl std::fmt::Display for PlanPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Discussing => write!(f, "Discussing"),
-            Self::ConfirmingSpec => write!(f, "Confirming"),
-            Self::GeneratingSpec => write!(f, "Generating"),
+            Self::InProgress => write!(f, "Planning"),
             Self::Done => write!(f, "Done"),
         }
     }
@@ -109,6 +140,8 @@ impl ChatMessage {
 pub struct App {
     /// Chat messages (user and assistant).
     messages: Vec<ChatMessage>,
+    /// Current streaming response buffer.
+    streaming_response: String,
     /// Current input buffer.
     input: String,
     /// Input cursor position.
@@ -119,8 +152,10 @@ pub struct App {
     feature_slug: String,
     /// Feature ID (e.g., "0001").
     feature_id: String,
-    /// Session for multi-turn conversation.
-    session: Session,
+    /// Channel to send requests to worker.
+    request_tx: Option<mpsc::Sender<RequestMessage>>,
+    /// Current session stats (updated by worker).
+    stats: SessionStats,
     /// Whether the app is running.
     running: bool,
     /// Whether we're waiting for a response.
@@ -134,6 +169,8 @@ pub struct App {
     total_chat_lines: u16,
     /// Visible chat height (for scroll calculation).
     visible_chat_height: u16,
+    /// Current spinner frame index for loading animation.
+    spinner_frame: usize,
 }
 
 impl std::fmt::Debug for App {
@@ -146,6 +183,7 @@ impl std::fmt::Debug for App {
             .field("phase", &self.phase)
             .field("running", &self.running)
             .field("waiting", &self.waiting)
+            .field("stats", &self.stats)
             .finish()
     }
 }
@@ -157,92 +195,117 @@ impl App {
     ///
     /// * `feature_slug` - The slug identifier for the feature
     /// * `feature_id` - The feature ID (e.g., "0001")
-    /// * `engine` - The GBA engine for creating sessions
     /// * `workdir` - Working directory path
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the session cannot be created.
-    pub async fn new(
-        feature_slug: String,
-        feature_id: String,
-        engine: &Engine<'_>,
-        workdir: &Path,
-    ) -> Result<Self, CliError> {
+    pub fn new(feature_slug: String, feature_id: String, workdir: &Path) -> Self {
         debug!(
             feature_slug = %feature_slug,
             feature_id = %feature_id,
             "creating TUI app"
         );
 
-        // Create session with plan task configuration
-        let context = json!({
-            "repo_path": workdir.display().to_string(),
-            "feature_id": feature_id,
-            "feature_slug": feature_slug,
-        });
-
-        let session = engine
-            .session_with_task(&TaskKind::Plan, &context, None)
-            .map_err(CliError::Engine)?;
-
-        let mut app = Self {
+        Self {
             messages: Vec::new(),
+            streaming_response: String::new(),
             input: String::new(),
             cursor_position: 0,
             scroll: 0,
             feature_slug,
             feature_id,
-            session,
+            request_tx: None,
+            stats: SessionStats::default(),
             running: true,
             waiting: false,
-            phase: PlanPhase::Discussing,
+            phase: PlanPhase::InProgress,
             workdir: workdir.to_path_buf(),
             total_chat_lines: 0,
             visible_chat_height: 0,
-        };
-
-        // Add initial system message
-        app.messages.push(ChatMessage::system(format!(
-            "Planning feature: {} (ID: {})",
-            app.feature_slug, app.feature_id
-        )));
-
-        Ok(app)
+            spinner_frame: 0,
+        }
     }
 
     /// Run the TUI application.
     ///
-    /// This method sets up the terminal, runs the event loop, and restores
-    /// the terminal state when done.
+    /// This method sets up the terminal, spawns the worker task, runs the event loop,
+    /// and restores the terminal state when done.
     ///
     /// # Errors
     ///
     /// Returns an error if terminal setup fails or an unrecoverable error occurs.
-    pub async fn run(&mut self) -> Result<Option<FeatureState>, CliError> {
+    pub async fn run(&mut self, engine: &Engine<'_>) -> Result<Option<FeatureState>, CliError> {
         // Setup terminal
         enable_raw_mode().map_err(|e| CliError::Io(format!("failed to enable raw mode: {}", e)))?;
         let mut stdout = io::stdout();
         stdout
             .execute(EnterAlternateScreen)
             .map_err(|e| CliError::Io(format!("failed to enter alternate screen: {}", e)))?;
+        stdout
+            .execute(EnableBracketedPaste)
+            .map_err(|e| CliError::Io(format!("failed to enable bracketed paste: {}", e)))?;
 
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)
             .map_err(|e| CliError::Io(format!("failed to create terminal: {}", e)))?;
 
+        // Draw initial UI immediately so user sees something
+        self.messages
+            .push(ChatMessage::system("Connecting to Claude...".to_string()));
+        terminal
+            .draw(|frame| self.view(frame))
+            .map_err(|e| CliError::Io(format!("failed to draw: {}", e)))?;
+
+        // Create session with plan task configuration
+        let context = json!({
+            "repo_path": self.workdir.display().to_string(),
+            "feature_id": self.feature_id,
+            "feature_slug": self.feature_slug,
+        });
+
+        let mut session = engine
+            .session_with_task(&TaskKind::Plan, &context, None)
+            .map_err(CliError::Engine)?;
+
         // Connect session
-        self.session.connect().await.map_err(CliError::Engine)?;
+        session.connect().await.map_err(CliError::Engine)?;
 
-        // Send initial message to start the conversation
-        self.send_initial_message().await?;
+        // Create channels for UI <-> Worker communication
+        let (request_tx, request_rx) = mpsc::channel::<RequestMessage>(10);
+        let (worker_tx, worker_rx) = mpsc::channel::<WorkerMessage>(100);
 
-        // Run event loop
-        let result = self.event_loop(&mut terminal).await;
+        // Store request sender for use in event loop
+        self.request_tx = Some(request_tx.clone());
+
+        // Spawn worker task
+        let worker_handle = tokio::spawn(async move {
+            worker_loop(session, request_rx, worker_tx).await;
+        });
+
+        // Update status - prompt user for feature description
+        self.messages.pop(); // Remove "Connecting..." message
+        self.messages.push(ChatMessage::assistant(format!(
+            "I'm ready to help you plan the **{}** feature.\n\n\
+             Can you tell me more about what you want this feature to do? \
+             Include any requirements, constraints, or specific details you have in mind.",
+            self.feature_slug
+        )));
+
+        // Run event loop (user will type their description first)
+        let result = self.event_loop(&mut terminal, worker_rx).await;
+
+        // Signal worker to shutdown
+        let _ = request_tx.send(RequestMessage::Shutdown).await;
+
+        // Wait for worker to finish
+        if let Err(e) = worker_handle.await {
+            warn!(error = %e, "worker task panicked");
+        }
 
         // Cleanup terminal
         disable_raw_mode()
             .map_err(|e| CliError::Io(format!("failed to disable raw mode: {}", e)))?;
+        terminal
+            .backend_mut()
+            .execute(DisableBracketedPaste)
+            .map_err(|e| CliError::Io(format!("failed to disable bracketed paste: {}", e)))?;
         terminal
             .backend_mut()
             .execute(LeaveAlternateScreen)
@@ -251,18 +314,14 @@ impl App {
             .show_cursor()
             .map_err(|e| CliError::Io(format!("failed to show cursor: {}", e)))?;
 
-        // Disconnect session
-        if let Err(e) = self.session.disconnect().await {
-            warn!(error = %e, "failed to disconnect session");
-        }
-
         result
     }
 
-    /// Run the main event loop.
+    /// Run the main event loop with proper UI/worker separation.
     async fn event_loop(
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        mut worker_rx: mpsc::Receiver<WorkerMessage>,
     ) -> Result<Option<FeatureState>, CliError> {
         while self.running {
             // Draw UI
@@ -270,27 +329,73 @@ impl App {
                 .draw(|frame| self.view(frame))
                 .map_err(|e| CliError::Io(format!("failed to draw: {}", e)))?;
 
-            // Handle input with timeout
-            let has_event = event::poll(std::time::Duration::from_millis(100))
-                .map_err(|e| CliError::Io(format!("failed to poll events: {}", e)))?;
-
-            if has_event {
-                let event = event::read()
-                    .map_err(|e| CliError::Io(format!("failed to read event: {}", e)))?;
-
-                if let Event::Key(key) = event
-                    && !self.waiting
-                {
-                    match self.handle_input(key).await? {
-                        InputAction::Continue => {}
-                        InputAction::Exit => {
-                            self.running = false;
+            // Use select to handle both keyboard input and worker messages
+            tokio::select! {
+                // Check for worker messages (non-blocking)
+                msg = worker_rx.recv() => {
+                    if let Some(msg) = msg {
+                        match msg {
+                            WorkerMessage::Text(text) => {
+                                self.streaming_response.push_str(&text);
+                            }
+                            WorkerMessage::Complete(stats) => {
+                                // Update stats from worker
+                                self.stats = stats;
+                                // Move streaming response to messages
+                                if !self.streaming_response.is_empty() {
+                                    let response = std::mem::take(&mut self.streaming_response);
+                                    self.messages.push(ChatMessage::assistant(response));
+                                    self.check_phase_transition();
+                                }
+                                self.waiting = false;
+                                self.scroll_to_bottom();
+                            }
+                            WorkerMessage::Error(err) => {
+                                self.streaming_response.clear();
+                                self.messages.push(ChatMessage::system(format!("Error: {}", err)));
+                                self.waiting = false;
+                                self.scroll_to_bottom();
+                            }
                         }
-                        InputAction::Send(message) => {
-                            self.send_message(message).await?;
+                    }
+                }
+
+                // Poll for keyboard input with short timeout
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(16)) => {
+                    // Check for keyboard events
+                    if event::poll(std::time::Duration::from_millis(0))
+                        .map_err(|e| CliError::Io(format!("failed to poll events: {}", e)))?
+                    {
+                        let evt = event::read()
+                            .map_err(|e| CliError::Io(format!("failed to read event: {}", e)))?;
+
+                        match evt {
+                            Event::Key(key) => {
+                                // Allow scrolling even while waiting
+                                if self.waiting {
+                                    self.handle_scroll_input(key);
+                                } else {
+                                    match self.handle_input(key)? {
+                                        InputAction::Continue => {}
+                                        InputAction::Exit => {
+                                            self.running = false;
+                                        }
+                                        InputAction::Send(message) => {
+                                            self.send_message(&message);
+                                        }
+                                        InputAction::ScrollUp => self.scroll_up(),
+                                        InputAction::ScrollDown => self.scroll_down(),
+                                    }
+                                }
+                            }
+                            Event::Paste(text) => {
+                                // Handle paste event - insert entire text at once
+                                if !self.waiting {
+                                    self.insert_str(&text);
+                                }
+                            }
+                            _ => {}
                         }
-                        InputAction::ScrollUp => self.scroll_up(),
-                        InputAction::ScrollDown => self.scroll_down(),
                     }
                 }
             }
@@ -304,116 +409,92 @@ impl App {
         }
     }
 
-    /// Send the initial message to start the planning conversation.
-    async fn send_initial_message(&mut self) -> Result<(), CliError> {
-        self.waiting = true;
+    /// Handle scroll-only input while waiting for response.
+    fn handle_scroll_input(&mut self, key: KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
 
-        // The initial user prompt comes from the template
-        let initial_prompt = format!(
-            "I want to plan a new feature: {}. Please help me understand and design it.",
-            self.feature_slug
-        );
-
-        self.messages.push(ChatMessage::user(&initial_prompt));
-
-        // Create event handler for streaming
-        let mut response = String::new();
-        let mut handler = TuiEventHandler::new(&mut response, &mut self.messages);
-
-        match self
-            .session
-            .send_stream(&initial_prompt, &mut handler)
-            .await
+        // Allow Ctrl+C to exit even while waiting
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
         {
-            Ok(resp) => {
-                if !resp.is_empty() {
-                    self.messages.push(ChatMessage::assistant(resp));
-                }
-            }
-            Err(e) => {
-                self.messages.push(ChatMessage::system(format!(
-                    "Error: Failed to get response: {}",
-                    e
-                )));
-            }
+            self.running = false;
+            return;
         }
 
-        self.waiting = false;
-        self.scroll_to_bottom();
-        Ok(())
+        match key.code {
+            KeyCode::PageUp | KeyCode::Up => self.scroll_up(),
+            KeyCode::PageDown | KeyCode::Down => self.scroll_down(),
+            KeyCode::Esc => self.running = false,
+            _ => {}
+        }
     }
 
     /// Handle a keyboard event.
-    async fn handle_input(&mut self, key: KeyEvent) -> Result<InputAction, CliError> {
+    fn handle_input(&mut self, key: KeyEvent) -> Result<InputAction, CliError> {
         InputHandler::handle_key(self, key)
     }
 
-    /// Send a message in the conversation.
-    pub async fn send_message(&mut self, message: String) -> Result<(), CliError> {
-        if message.trim().is_empty() {
-            return Ok(());
+    /// Send a message to the worker (non-blocking).
+    ///
+    /// Handles special commands:
+    /// - `/done` or `/exit` - Exit planning mode
+    fn send_message(&mut self, message: &str) {
+        let trimmed = message.trim();
+        if trimmed.is_empty() {
+            return;
         }
 
+        // Handle user commands
+        let lower = trimmed.to_lowercase();
+        if lower == "/done" || lower == "/exit" {
+            self.messages
+                .push(ChatMessage::system("Exiting planning mode...".to_string()));
+            self.phase = PlanPhase::Done;
+            self.running = false;
+            return;
+        }
+
+        // Update UI state immediately
         self.waiting = true;
-        self.messages.push(ChatMessage::user(&message));
+        self.messages.push(ChatMessage::user(message));
+        self.streaming_response.clear();
+        self.scroll_to_bottom();
 
-        // Create event handler for streaming
-        let mut response = String::new();
-        let mut handler = TuiEventHandler::new(&mut response, &mut self.messages);
-
-        match self.session.send_stream(&message, &mut handler).await {
-            Ok(resp) => {
-                if !resp.is_empty() {
-                    self.messages.push(ChatMessage::assistant(resp));
-                }
-
-                // Check for phase transitions based on response content
-                self.check_phase_transition();
-            }
-            Err(e) => {
-                self.messages.push(ChatMessage::system(format!(
-                    "Error: Failed to get response: {}",
-                    e
-                )));
+        // Send to worker via channel (non-blocking)
+        if let Some(tx) = &self.request_tx {
+            // Use try_send to avoid blocking
+            if let Err(e) = tx.try_send(RequestMessage::Send(message.to_string())) {
+                warn!(error = %e, "failed to send message to worker");
+                self.messages
+                    .push(ChatMessage::system("Failed to send message".to_string()));
+                self.waiting = false;
             }
         }
-
-        self.waiting = false;
-        self.scroll_to_bottom();
-        Ok(())
     }
 
-    /// Check for phase transitions based on conversation content.
+    /// Check for phase transitions based on file existence.
+    ///
+    /// Instead of relying on keyword matching (unreliable), we check if
+    /// the state.yml file has been created, which indicates the plan is complete.
     fn check_phase_transition(&mut self) {
-        let Some(last_msg) = self.messages.last() else {
-            return;
-        };
+        // Check if state.yml exists - this is the definitive completion signal
+        let state_file = self
+            .workdir
+            .join(".gba")
+            .join(format!("{}_{}", self.feature_id, self.feature_slug))
+            .join("state.yml");
 
-        if last_msg.role != MessageRole::Assistant {
-            return;
-        }
-
-        let content = last_msg.content.to_lowercase();
-
-        // Check for completion indicators
-        if content.contains("plan finished")
-            || content.contains("planning complete")
-            || content.contains("gba run")
-        {
+        if state_file.exists() {
             self.phase = PlanPhase::Done;
-            info!(feature_slug = %self.feature_slug, "planning completed");
-        } else if content.contains("generating spec") || content.contains("creating specification")
-        {
-            self.phase = PlanPhase::GeneratingSpec;
-        } else if content.contains("approve") || content.contains("confirm") {
-            self.phase = PlanPhase::ConfirmingSpec;
+            info!(feature_slug = %self.feature_slug, "planning completed (state.yml detected)");
+            // Auto-exit when planning is done
+            self.running = false;
         }
     }
 
     /// Create the feature state for saving.
     fn create_feature_state(&self) -> FeatureState {
         let now = Utc::now();
-        let stats = self.session.stats();
 
         FeatureState {
             feature: FeatureInfo {
@@ -438,10 +519,10 @@ impl App {
                 stats: None,
             }],
             total_stats: TaskStats {
-                turns: stats.turns,
-                input_tokens: stats.input_tokens,
-                output_tokens: stats.output_tokens,
-                cost_usd: stats.cost_usd,
+                turns: self.stats.turns,
+                input_tokens: self.stats.input_tokens,
+                output_tokens: self.stats.output_tokens,
+                cost_usd: self.stats.cost_usd,
             },
             result: FeatureResult::default(),
             error: None,
@@ -450,6 +531,11 @@ impl App {
 
     /// Render the TUI view.
     pub fn view(&mut self, frame: &mut Frame) {
+        // Advance spinner when waiting
+        if self.waiting {
+            self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
+        }
+
         let area = frame.area();
 
         // Main layout: title, chat area, input area, help
@@ -458,7 +544,7 @@ impl App {
             .constraints([
                 Constraint::Length(3), // Title
                 Constraint::Min(10),   // Chat
-                Constraint::Length(3), // Input
+                Constraint::Length(5), // Input (taller for wrapping)
                 Constraint::Length(1), // Help
             ])
             .split(area);
@@ -472,12 +558,12 @@ impl App {
     /// Render the title bar.
     fn render_title(&self, frame: &mut Frame, area: Rect) {
         let phase_str = self.phase.to_string();
-        let status = if self.waiting {
-            "Working..."
+        let title = if self.waiting {
+            let spinner = SPINNER_FRAMES[self.spinner_frame];
+            format!(" GBA Plan: {} [{} Working...] ", self.feature_slug, spinner)
         } else {
-            &phase_str
+            format!(" GBA Plan: {} [{}] ", self.feature_slug, phase_str)
         };
-        let title = format!(" GBA Plan: {} [{}] ", self.feature_slug, status);
 
         let block = Block::default()
             .title(title)
@@ -489,8 +575,10 @@ impl App {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
 
-        let stats = self.session.stats();
-        let stats_text = format!("Turns: {} | Cost: ${:.4}", stats.turns, stats.cost_usd);
+        let stats_text = format!(
+            "Turns: {} | Cost: ${:.4}",
+            self.stats.turns, self.stats.cost_usd
+        );
 
         let paragraph = Paragraph::new(stats_text)
             .block(block)
@@ -502,9 +590,18 @@ impl App {
     /// Render the chat area.
     fn render_chat(&mut self, frame: &mut Frame, area: Rect) {
         let inner_height = area.height.saturating_sub(2); // Account for borders
+        let inner_width = area.width.saturating_sub(2); // Account for borders
         self.visible_chat_height = inner_height;
 
-        let chat_widget = ChatWidget::new(&self.messages, self.scroll, inner_height);
+        // Create a temporary list including streaming response if any
+        let mut display_messages = self.messages.clone();
+        if !self.streaming_response.is_empty() {
+            display_messages.push(ChatMessage::assistant(&self.streaming_response));
+        }
+
+        // Pass actual width for accurate line calculation
+        let chat_widget =
+            ChatWidget::new(&display_messages, self.scroll, inner_height, inner_width);
         self.total_chat_lines = chat_widget.total_lines();
 
         let block = Block::default()
@@ -544,13 +641,26 @@ impl App {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Green));
 
-        let paragraph = Paragraph::new(input_text).style(input_style).block(block);
+        let paragraph = Paragraph::new(input_text)
+            .style(input_style)
+            .block(block)
+            .wrap(Wrap { trim: false });
 
         frame.render_widget(paragraph, area);
 
-        // Show cursor position
+        // Show cursor position (accounting for text wrapping)
         if !self.waiting {
-            frame.set_cursor_position((area.x + 3 + self.cursor_position as u16, area.y + 1));
+            // Inner width (excluding borders)
+            let inner_width = area.width.saturating_sub(2) as usize;
+            // Account for "> " prefix (2 chars)
+            let cursor_with_prefix = self.cursor_position + 2;
+            let cursor_row = cursor_with_prefix / inner_width;
+            let cursor_col = cursor_with_prefix % inner_width;
+
+            frame.set_cursor_position((
+                area.x + 1 + cursor_col as u16,
+                area.y + 1 + cursor_row as u16,
+            ));
         }
     }
 
@@ -559,8 +669,10 @@ impl App {
         let help_text = vec![
             Span::styled("[Enter]", Style::default().fg(Color::Yellow)),
             Span::raw(" Send  "),
+            Span::styled("/done", Style::default().fg(Color::Yellow)),
+            Span::raw(" Finish  "),
             Span::styled("[Ctrl+C]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Exit  "),
+            Span::raw(" Cancel  "),
             Span::styled("[PgUp/PgDn]", Style::default().fg(Color::Yellow)),
             Span::raw(" Scroll"),
         ];
@@ -612,6 +724,12 @@ impl App {
     pub fn insert_char(&mut self, c: char) {
         self.input.insert(self.cursor_position, c);
         self.cursor_position += 1;
+    }
+
+    /// Insert a string at the cursor position (used for paste).
+    pub fn insert_str(&mut self, s: &str) {
+        self.input.insert_str(self.cursor_position, s);
+        self.cursor_position += s.len();
     }
 
     /// Delete the character before the cursor.
@@ -669,21 +787,75 @@ impl App {
     }
 }
 
-/// Event handler for TUI streaming.
-struct TuiEventHandler<'a> {
-    response: &'a mut String,
-    messages: &'a mut Vec<ChatMessage>,
+/// Worker loop that handles communication with Claude in a separate task.
+///
+/// This function runs in a spawned tokio task and processes messages from
+/// the UI, sending responses back via the worker channel.
+async fn worker_loop(
+    mut session: Session,
+    mut request_rx: mpsc::Receiver<RequestMessage>,
+    worker_tx: mpsc::Sender<WorkerMessage>,
+) {
+    debug!("worker loop started");
+
+    while let Some(request) = request_rx.recv().await {
+        match request {
+            RequestMessage::Send(message) => {
+                debug!(message_len = message.len(), "worker received message");
+
+                // Create event handler for streaming
+                let mut handler = ChannelEventHandler::new(worker_tx.clone());
+
+                // Send message and stream response
+                // Note: All text is sent via handler.on_text() during streaming,
+                // so we don't need to send the return value again.
+                match session.send_stream(&message, &mut handler).await {
+                    Ok(_) => {
+                        // Get updated stats
+                        let stats = session.stats();
+                        let session_stats = SessionStats {
+                            turns: stats.turns,
+                            input_tokens: stats.input_tokens,
+                            output_tokens: stats.output_tokens,
+                            cost_usd: stats.cost_usd,
+                        };
+
+                        let _ = worker_tx.send(WorkerMessage::Complete(session_stats)).await;
+                    }
+                    Err(e) => {
+                        let _ = worker_tx.send(WorkerMessage::Error(e.to_string())).await;
+                    }
+                }
+            }
+            RequestMessage::Shutdown => {
+                debug!("worker received shutdown signal");
+                // Disconnect session before exiting
+                if let Err(e) = session.disconnect().await {
+                    warn!(error = %e, "failed to disconnect session in worker");
+                }
+                break;
+            }
+        }
+    }
+
+    debug!("worker loop finished");
 }
 
-impl<'a> TuiEventHandler<'a> {
-    fn new(response: &'a mut String, messages: &'a mut Vec<ChatMessage>) -> Self {
-        Self { response, messages }
+/// Event handler that sends streaming events via a channel.
+struct ChannelEventHandler {
+    tx: mpsc::Sender<WorkerMessage>,
+}
+
+impl ChannelEventHandler {
+    fn new(tx: mpsc::Sender<WorkerMessage>) -> Self {
+        Self { tx }
     }
 }
 
-impl gba_core::event::EventHandler for TuiEventHandler<'_> {
+impl gba_core::event::EventHandler for ChannelEventHandler {
     fn on_text(&mut self, text: &str) {
-        self.response.push_str(text);
+        // Use try_send to avoid blocking
+        let _ = self.tx.try_send(WorkerMessage::Text(text.to_string()));
     }
 
     fn on_tool_use(&mut self, tool: &str, _input: &serde_json::Value) {
@@ -695,8 +867,7 @@ impl gba_core::event::EventHandler for TuiEventHandler<'_> {
     }
 
     fn on_error(&mut self, error: &str) {
-        self.messages
-            .push(ChatMessage::system(format!("Error: {}", error)));
+        let _ = self.tx.try_send(WorkerMessage::Error(error.to_string()));
     }
 
     fn on_complete(&mut self) {
@@ -725,9 +896,7 @@ mod tests {
 
     #[test]
     fn test_plan_phase_display() {
-        assert_eq!(format!("{}", PlanPhase::Discussing), "Discussing");
-        assert_eq!(format!("{}", PlanPhase::ConfirmingSpec), "Confirming");
-        assert_eq!(format!("{}", PlanPhase::GeneratingSpec), "Generating");
+        assert_eq!(format!("{}", PlanPhase::InProgress), "Planning");
         assert_eq!(format!("{}", PlanPhase::Done), "Done");
     }
 }
