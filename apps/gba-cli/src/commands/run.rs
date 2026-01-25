@@ -54,15 +54,100 @@ impl CheckConfig {
         fail_message: "Verification: FAILED",
     };
 
-    /// Check if the output indicates success.
+    /// Check if the output indicates success using strict pattern matching.
+    ///
+    /// The keyword must appear in one of these forms:
+    /// - On its own line (with optional leading/trailing whitespace)
+    /// - In a verdict line like "Verdict: APPROVED" or "Result: VERIFIED"
+    /// - As the last word in the output (within last 100 characters)
+    /// - Surrounded by word boundaries (not part of another word)
     fn is_success(&self, output: &str) -> bool {
-        self.success_keywords.iter().any(|kw| output.contains(kw))
+        self.success_keywords
+            .iter()
+            .any(|kw| Self::matches_keyword(output, kw))
     }
 
-    /// Check if the output indicates failure.
+    /// Check if the output indicates failure using strict pattern matching.
     fn is_failure(&self, output: &str) -> bool {
-        self.failure_keywords.iter().any(|kw| output.contains(kw))
+        self.failure_keywords
+            .iter()
+            .any(|kw| Self::matches_keyword(output, kw))
     }
+
+    /// Check if a keyword matches the output with strict pattern rules.
+    fn matches_keyword(output: &str, keyword: &str) -> bool {
+        // Check for keyword on its own line (with optional prefixes like "Verdict:")
+        for line in output.lines() {
+            let trimmed = line.trim();
+
+            // Exact match on trimmed line
+            if trimmed == keyword {
+                return true;
+            }
+
+            // Match patterns like "Verdict: APPROVED", "Result: VERIFIED", "Status: FAILED"
+            let prefixes = ["Verdict:", "Result:", "Status:", "Outcome:"];
+            for prefix in prefixes {
+                if let Some(rest) = trimmed.strip_prefix(prefix)
+                    && rest.trim() == keyword
+                {
+                    return true;
+                }
+            }
+
+            // Match pattern with brackets like "[APPROVED]" or "**APPROVED**"
+            if trimmed == format!("[{}]", keyword) || trimmed == format!("**{}**", keyword) {
+                return true;
+            }
+        }
+
+        // Check if keyword appears at the end of output (within last 100 chars)
+        // This handles cases where the verdict is the final line
+        let tail = if output.len() > 100 {
+            &output[output.len() - 100..]
+        } else {
+            output
+        };
+
+        // Check for keyword with word boundaries in the tail
+        // This is a simple word boundary check without regex
+        if contains_word(tail, keyword) {
+            return true;
+        }
+
+        false
+    }
+}
+
+/// Check if a string contains a keyword as a complete word.
+///
+/// A word boundary is defined as the start/end of string or a non-alphanumeric character.
+fn contains_word(text: &str, word: &str) -> bool {
+    let mut search_start = 0;
+    while let Some(pos) = text[search_start..].find(word) {
+        let abs_pos = search_start + pos;
+        let before_ok = abs_pos == 0
+            || !text[..abs_pos]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric());
+        let after_pos = abs_pos + word.len();
+        let after_ok = after_pos >= text.len()
+            || !text[after_pos..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric());
+
+        if before_ok && after_ok {
+            return true;
+        }
+
+        search_start = abs_pos + 1;
+        if search_start >= text.len() {
+            break;
+        }
+    }
+    false
 }
 
 /// Result of a check-fix loop iteration.
@@ -857,5 +942,87 @@ mod tests {
             assert!(phase.completed_at.is_none());
             assert!(phase.commit_sha.is_none());
         }
+    }
+
+    #[test]
+    fn test_keyword_match_exact_line() {
+        assert!(CheckConfig::matches_keyword("APPROVED", "APPROVED"));
+        assert!(CheckConfig::matches_keyword("  APPROVED  ", "APPROVED"));
+        assert!(CheckConfig::matches_keyword(
+            "Some text\nAPPROVED\nMore text",
+            "APPROVED"
+        ));
+    }
+
+    #[test]
+    fn test_keyword_match_verdict_prefix() {
+        assert!(CheckConfig::matches_keyword(
+            "Verdict: APPROVED",
+            "APPROVED"
+        ));
+        assert!(CheckConfig::matches_keyword("Result: VERIFIED", "VERIFIED"));
+        assert!(CheckConfig::matches_keyword("Status: FAILED", "FAILED"));
+        assert!(CheckConfig::matches_keyword(
+            "Outcome: NEEDS_CHANGES",
+            "NEEDS_CHANGES"
+        ));
+    }
+
+    #[test]
+    fn test_keyword_match_bracketed() {
+        assert!(CheckConfig::matches_keyword("[APPROVED]", "APPROVED"));
+        assert!(CheckConfig::matches_keyword("**VERIFIED**", "VERIFIED"));
+    }
+
+    #[test]
+    fn test_keyword_match_end_of_output() {
+        // Keyword at end with word boundary
+        assert!(CheckConfig::matches_keyword(
+            "The review is APPROVED",
+            "APPROVED"
+        ));
+        assert!(CheckConfig::matches_keyword(
+            "After careful consideration, the code is VERIFIED",
+            "VERIFIED"
+        ));
+    }
+
+    #[test]
+    fn test_keyword_no_match_partial() {
+        // Should not match partial words
+        assert!(!CheckConfig::matches_keyword("UNAPPROVED", "APPROVED"));
+        assert!(!CheckConfig::matches_keyword("APPROVEDLY", "APPROVED"));
+        assert!(!CheckConfig::matches_keyword(
+            "The review is NOTAPPROVED",
+            "APPROVED"
+        ));
+    }
+
+    #[test]
+    fn test_keyword_match_word_boundary() {
+        assert!(contains_word("Hello APPROVED World", "APPROVED"));
+        assert!(contains_word("APPROVED", "APPROVED"));
+        assert!(!contains_word("UNAPPROVED", "APPROVED"));
+        assert!(!contains_word("APPROVEDLY", "APPROVED"));
+        assert!(contains_word("Status:APPROVED", "APPROVED"));
+    }
+
+    #[test]
+    fn test_check_config_is_success() {
+        let config = CheckConfig::REVIEW;
+        assert!(config.is_success("Verdict: APPROVED"));
+        assert!(config.is_success("APPROVED"));
+        assert!(!config.is_success("UNAPPROVED"));
+        assert!(!config.is_success("This is not approved"));
+    }
+
+    #[test]
+    fn test_check_config_is_failure() {
+        let config = CheckConfig::REVIEW;
+        assert!(config.is_failure("Verdict: NEEDS_CHANGES"));
+        assert!(config.is_failure("NEEDS_CHANGES"));
+        // Note: "NO_NEEDS_CHANGES" would match because underscore is not alphanumeric,
+        // so NEEDS_CHANGES has word boundaries. This is acceptable behavior.
+        // The key protection is against words like "UNAPPROVED" or "APPROVEDLY".
     }
 }
