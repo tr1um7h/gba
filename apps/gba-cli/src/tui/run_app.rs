@@ -1187,4 +1187,131 @@ mod tests {
         });
         assert!(app.streaming_content.is_empty());
     }
+
+    #[test]
+    fn test_handle_check_started() {
+        let state = create_test_state();
+        let mut app = RunApp::new(&state);
+
+        app.handle_message(RunMessage::CheckStarted {
+            check_type: CheckType::Review,
+            max_iterations: 3,
+        });
+
+        assert_eq!(app.execution_stage, ExecutionStage::Review);
+        assert_eq!(app.review_state.max_iterations, 3);
+        assert_eq!(app.review_state.status, CheckStatus::Checking);
+        assert!(app.streaming_content.is_empty());
+    }
+
+    #[test]
+    fn test_handle_check_iteration_started() {
+        let state = create_test_state();
+        let mut app = RunApp::new(&state);
+
+        app.handle_message(RunMessage::CheckIterationStarted {
+            check_type: CheckType::Verification,
+            iteration: 2,
+            max_iterations: 3,
+        });
+
+        assert_eq!(app.verification_state.current_iteration, 2);
+        assert_eq!(app.verification_state.max_iterations, 3);
+        assert_eq!(app.verification_state.status, CheckStatus::Checking);
+    }
+
+    #[test]
+    fn test_handle_check_completed_passed() {
+        let state = create_test_state();
+        let mut app = RunApp::new(&state);
+
+        app.handle_message(RunMessage::CheckCompleted {
+            check_type: CheckType::Review,
+            result: CheckFinalResult::Passed,
+        });
+
+        assert_eq!(app.review_state.status, CheckStatus::Passed);
+        assert!(app.activity.contains("PASSED"));
+    }
+
+    #[test]
+    fn test_handle_check_completed_needs_changes() {
+        let state = create_test_state();
+        let mut app = RunApp::new(&state);
+
+        app.handle_message(RunMessage::CheckCompleted {
+            check_type: CheckType::Verification,
+            result: CheckFinalResult::NeedsChanges("test reason".to_string()),
+        });
+
+        assert_eq!(app.verification_state.status, CheckStatus::NeedsChanges);
+        assert!(app.activity.contains("needs changes"));
+    }
+
+    #[test]
+    fn test_handle_fix_started() {
+        let state = create_test_state();
+        let mut app = RunApp::new(&state);
+
+        // Set max_iterations first
+        app.review_state.max_iterations = 3;
+
+        app.handle_message(RunMessage::FixStarted {
+            check_type: CheckType::Review,
+            iteration: 1,
+        });
+
+        assert_eq!(app.review_state.status, CheckStatus::Fixing);
+        assert!(app.activity.contains("Fixing"));
+    }
+
+    #[test]
+    fn test_handle_pr_creation() {
+        let state = create_test_state();
+        let mut app = RunApp::new(&state);
+
+        app.handle_message(RunMessage::PrCreationStarted);
+        assert_eq!(app.execution_stage, ExecutionStage::PrCreation);
+
+        app.handle_message(RunMessage::PrCreationCompleted {
+            pr_url: Some("https://github.com/test/repo/pull/123".to_string()),
+        });
+        assert!(app.pr_url.is_some());
+        assert!(app.activity.contains("PR created"));
+    }
+
+    #[test]
+    fn test_handle_complete() {
+        let state = create_test_state();
+        let mut app = RunApp::new(&state);
+
+        app.handle_message(RunMessage::Complete);
+
+        assert!(app.complete);
+        assert_eq!(app.execution_stage, ExecutionStage::Done);
+    }
+
+    #[test]
+    fn test_progress_with_checks() {
+        let mut state = create_test_state();
+        // Complete all phases
+        state.phases[0].status = PhaseStatus::Completed;
+        state.phases[1].status = PhaseStatus::Completed;
+        let mut app = RunApp::new(&state);
+
+        // All phases complete = 60%
+        assert_eq!(app.progress_percent(), 60);
+
+        // Review passed = 60% + 15% = 75%
+        app.review_state.status = CheckStatus::Passed;
+        assert_eq!(app.progress_percent(), 75);
+
+        // Verification passed = 75% + 15% = 90%
+        app.verification_state.status = CheckStatus::Passed;
+        assert_eq!(app.progress_percent(), 90);
+
+        // PR created = 90% + 10% = 100%
+        app.execution_stage = ExecutionStage::Done;
+        assert_eq!(app.progress_percent(), 100);
+    }
 }

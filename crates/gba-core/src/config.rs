@@ -15,7 +15,7 @@ use gba_pm::PromptManager;
 ///
 /// This wraps the SDK's `PermissionMode` to allow deserialization from YAML.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum TaskPermissionMode {
     /// Accept edits but prompt for other operations.
     AcceptEdits,
@@ -131,7 +131,7 @@ mod tests {
     fn test_should_deserialize_task_config_with_permission_mode() {
         let yaml = r#"
 preset: true
-permissionMode: bypass_permissions
+permissionMode: bypassPermissions
 "#;
         let config: TaskConfig = serde_yaml::from_str(yaml).unwrap();
 

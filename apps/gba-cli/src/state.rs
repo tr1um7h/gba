@@ -23,20 +23,20 @@ use crate::error::CliError;
 /// feature:
 ///   id: "0001"
 ///   slug: add-user-auth
-///   created_at: "2024-01-15T10:30:00Z"
-///   updated_at: "2024-01-15T14:20:00Z"
-/// status: in_progress
-/// current_phase: 2
+///   createdAt: "2024-01-15T10:30:00Z"
+///   updatedAt: "2024-01-15T14:20:00Z"
+/// status: inProgress
+/// currentPhase: 2
 /// git:
-///   worktree_path: .trees/0001_add-user-auth
+///   worktreePath: .trees/0001_add-user-auth
 ///   branch: feature/0001-add-user-auth
-///   base_branch: main
+///   baseBranch: main
 /// phases:
 ///   - name: setup
 ///     status: completed
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct FeatureState {
     /// Feature identification.
     pub feature: FeatureInfo,
@@ -126,7 +126,7 @@ impl FeatureState {
 
 /// Feature identification information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct FeatureInfo {
     /// Feature ID (e.g., "0001").
     pub id: String,
@@ -143,7 +143,7 @@ pub struct FeatureInfo {
 
 /// Feature execution status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum FeatureStatus {
     /// Feature is planned but not started.
     Planned,
@@ -159,7 +159,7 @@ impl std::fmt::Display for FeatureStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Planned => write!(f, "planned"),
-            Self::InProgress => write!(f, "in_progress"),
+            Self::InProgress => write!(f, "inProgress"),
             Self::Completed => write!(f, "completed"),
             Self::Failed => write!(f, "failed"),
         }
@@ -168,7 +168,7 @@ impl std::fmt::Display for FeatureStatus {
 
 /// Git state for a feature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct GitState {
     /// Path to the git worktree.
     pub worktree_path: String,
@@ -182,7 +182,7 @@ pub struct GitState {
 
 /// Individual phase execution state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct PhaseState {
     /// Phase name (e.g., "setup", "implementation").
     pub name: String,
@@ -209,7 +209,7 @@ pub struct PhaseState {
 
 /// Phase execution status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum PhaseStatus {
     /// Phase not yet started.
     Pending,
@@ -225,7 +225,7 @@ impl std::fmt::Display for PhaseStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Pending => write!(f, "pending"),
-            Self::InProgress => write!(f, "in_progress"),
+            Self::InProgress => write!(f, "inProgress"),
             Self::Completed => write!(f, "completed"),
             Self::Failed => write!(f, "failed"),
         }
@@ -234,7 +234,7 @@ impl std::fmt::Display for PhaseStatus {
 
 /// Task execution statistics.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct TaskStats {
     /// Number of conversation turns.
     pub turns: u32,
@@ -251,7 +251,7 @@ pub struct TaskStats {
 
 /// Final feature result.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct FeatureResult {
     /// URL of the created pull request.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -264,6 +264,46 @@ pub struct FeatureResult {
     /// Whether the PR was merged.
     #[serde(default)]
     pub merged: bool,
+
+    /// Code review result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<CheckResultState>,
+
+    /// Verification result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification: Option<CheckResultState>,
+}
+
+/// Result of a check (review or verification).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckResultState {
+    /// Final status of the check.
+    pub status: CheckResultStatus,
+
+    /// Number of iterations performed.
+    pub iterations: u32,
+
+    /// When the check completed.
+    pub completed_at: DateTime<Utc>,
+
+    /// Error message if the check failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Status of a check result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckResultStatus {
+    /// Check passed successfully.
+    Passed,
+    /// Check found issues that still need changes.
+    NeedsChanges,
+    /// Check encountered an error.
+    Error,
+    /// Check was skipped.
+    Skipped,
 }
 
 #[cfg(test)]
@@ -275,48 +315,48 @@ mod tests {
 feature:
   id: "0001"
   slug: add-user-auth
-  created_at: "2024-01-15T10:30:00Z"
-  updated_at: "2024-01-15T14:20:00Z"
-status: in_progress
-current_phase: 2
+  createdAt: "2024-01-15T10:30:00Z"
+  updatedAt: "2024-01-15T14:20:00Z"
+status: inProgress
+currentPhase: 2
 git:
-  worktree_path: .trees/0001_add-user-auth
+  worktreePath: .trees/0001_add-user-auth
   branch: feature/0001-add-user-auth
-  base_branch: main
+  baseBranch: main
 phases:
   - name: setup
     status: completed
-    started_at: "2024-01-15T10:35:00Z"
-    completed_at: "2024-01-15T10:42:00Z"
-    commit_sha: abc1234
+    startedAt: "2024-01-15T10:35:00Z"
+    completedAt: "2024-01-15T10:42:00Z"
+    commitSha: abc1234
     stats:
       turns: 5
-      input_tokens: 12500
-      output_tokens: 8300
-      cost_usd: 0.15
+      inputTokens: 12500
+      outputTokens: 8300
+      costUsd: 0.15
   - name: implementation
     status: completed
-    started_at: "2024-01-15T10:45:00Z"
-    completed_at: "2024-01-15T11:30:00Z"
-    commit_sha: def5678
+    startedAt: "2024-01-15T10:45:00Z"
+    completedAt: "2024-01-15T11:30:00Z"
+    commitSha: def5678
     stats:
       turns: 12
-      input_tokens: 45000
-      output_tokens: 32000
-      cost_usd: 0.58
+      inputTokens: 45000
+      outputTokens: 32000
+      costUsd: 0.58
   - name: testing
-    status: in_progress
-    started_at: "2024-01-15T11:35:00Z"
+    status: inProgress
+    startedAt: "2024-01-15T11:35:00Z"
     stats:
       turns: 3
-      input_tokens: 8000
-      output_tokens: 5500
-      cost_usd: 0.10
-total_stats:
+      inputTokens: 8000
+      outputTokens: 5500
+      costUsd: 0.10
+totalStats:
   turns: 20
-  input_tokens: 65500
-  output_tokens: 45800
-  cost_usd: 0.83
+  inputTokens: 65500
+  outputTokens: 45800
+  costUsd: 0.83
 result:
   merged: false
 "#
@@ -383,7 +423,7 @@ result:
     #[test]
     fn test_feature_status_display() {
         assert_eq!(format!("{}", FeatureStatus::Planned), "planned");
-        assert_eq!(format!("{}", FeatureStatus::InProgress), "in_progress");
+        assert_eq!(format!("{}", FeatureStatus::InProgress), "inProgress");
         assert_eq!(format!("{}", FeatureStatus::Completed), "completed");
         assert_eq!(format!("{}", FeatureStatus::Failed), "failed");
     }
@@ -391,7 +431,7 @@ result:
     #[test]
     fn test_phase_status_display() {
         assert_eq!(format!("{}", PhaseStatus::Pending), "pending");
-        assert_eq!(format!("{}", PhaseStatus::InProgress), "in_progress");
+        assert_eq!(format!("{}", PhaseStatus::InProgress), "inProgress");
         assert_eq!(format!("{}", PhaseStatus::Completed), "completed");
         assert_eq!(format!("{}", PhaseStatus::Failed), "failed");
     }

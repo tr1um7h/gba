@@ -16,7 +16,9 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::error::CliError;
-use crate::state::{FeatureState, FeatureStatus, PhaseStatus, TaskStats};
+use crate::state::{
+    CheckResultState, CheckResultStatus, FeatureState, FeatureStatus, PhaseStatus, TaskStats,
+};
 use crate::tui::{
     CheckFinalResult, CheckIterationResult, CheckType, RunApp, RunMessage, TuiEventHandler,
 };
@@ -329,6 +331,8 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
 /// 3. Verification with fix loop
 /// 4. PR creation
 ///
+/// The function monitors the TUI channel and aborts gracefully if the TUI is closed.
+///
 /// Returns the updated state and the result of the pipeline.
 async fn execute_full_pipeline_with_tui(
     exec_ctx: TuiExecutionContext,
@@ -366,66 +370,171 @@ async fn execute_full_pipeline_with_tui(
         return Ok((state, phase_result));
     }
 
-    // === Phase 2: Code Review ===
-    let _ = tx
-        .send(RunMessage::CheckStarted {
-            check_type: CheckType::Review,
-            max_iterations: MAX_FIX_ITERATIONS,
-        })
-        .await;
-
-    let review_result =
-        run_check_fix_loop_with_tui(&engine, &ctx, &CheckConfig::REVIEW, CheckType::Review, &tx)
-            .await;
-
-    let _ = tx
-        .send(RunMessage::CheckCompleted {
-            check_type: CheckType::Review,
-            result: review_result.clone(),
-        })
-        .await;
-
-    // Check if review failed with needs_changes (soft fail, continue)
-    if let CheckFinalResult::NeedsChanges(ref reason) = review_result {
-        warn!("Code review needs changes: {}", reason);
-        // Don't fail the pipeline, continue to verification
-    }
-
-    // === Phase 3: Verification ===
-    let _ = tx
-        .send(RunMessage::CheckStarted {
-            check_type: CheckType::Verification,
-            max_iterations: MAX_FIX_ITERATIONS,
-        })
-        .await;
-
-    let verification_result = run_check_fix_loop_with_tui(
-        &engine,
-        &ctx,
-        &CheckConfig::VERIFICATION,
-        CheckType::Verification,
-        &tx,
-    )
-    .await;
-
-    let _ = tx
-        .send(RunMessage::CheckCompleted {
-            check_type: CheckType::Verification,
-            result: verification_result.clone(),
-        })
-        .await;
-
-    // Check if verification failed with needs_changes (this is a harder fail)
-    if let CheckFinalResult::NeedsChanges(ref reason) = verification_result {
-        warn!("Verification needs changes: {}", reason);
-        save_failed_state(&mut state, &feature_dir, reason)?;
-        let _ = tx.send(RunMessage::Complete).await;
+    // Check if TUI is still running before continuing to checks
+    if tx.is_closed() {
+        warn!("TUI closed, aborting pipeline after phases");
         return Ok((
             state,
-            Err(CliError::InvalidState(format!(
-                "Verification failed: {}",
-                reason
-            ))),
+            Err(CliError::InvalidState("TUI closed by user".to_string())),
+        ));
+    }
+
+    // In dry_run mode, skip review and verification
+    if dry_run {
+        let _ = tx
+            .send(RunMessage::Activity(
+                "Dry run: Skipping review and verification".to_string(),
+            ))
+            .await;
+    } else {
+        // === Phase 2: Code Review ===
+        if tx
+            .send(RunMessage::CheckStarted {
+                check_type: CheckType::Review,
+                max_iterations: MAX_FIX_ITERATIONS,
+            })
+            .await
+            .is_err()
+        {
+            warn!("TUI closed, aborting pipeline before review");
+            return Ok((
+                state,
+                Err(CliError::InvalidState("TUI closed by user".to_string())),
+            ));
+        }
+
+        let (review_result, review_iterations) = run_check_fix_loop_with_tui(
+            &engine,
+            &ctx,
+            &CheckConfig::REVIEW,
+            CheckType::Review,
+            &tx,
+        )
+        .await;
+
+        // Persist review result to state
+        state.result.review = Some(CheckResultState {
+            status: check_final_result_to_status(&review_result),
+            iterations: review_iterations,
+            completed_at: Utc::now(),
+            error: match &review_result {
+                CheckFinalResult::Error(e) => Some(e.clone()),
+                _ => None,
+            },
+        });
+        state.save(&feature_dir)?;
+
+        let _ = tx
+            .send(RunMessage::CheckCompleted {
+                check_type: CheckType::Review,
+                result: review_result.clone(),
+            })
+            .await;
+
+        // Handle review result with explicit error logging
+        match &review_result {
+            CheckFinalResult::Passed => {
+                info!("Code review passed");
+            }
+            CheckFinalResult::NeedsChanges(reason) => {
+                warn!("Code review needs changes: {}", reason);
+                // Soft fail: continue to verification
+            }
+            CheckFinalResult::Error(e) => {
+                warn!("Code review encountered error: {}", e);
+                // Soft fail: continue to verification
+            }
+            CheckFinalResult::Skipped(reason) => {
+                info!("Code review skipped: {}", reason);
+            }
+        }
+
+        // Check if TUI is still running
+        if tx.is_closed() {
+            warn!("TUI closed, aborting pipeline after review");
+            return Ok((
+                state,
+                Err(CliError::InvalidState("TUI closed by user".to_string())),
+            ));
+        }
+
+        // === Phase 3: Verification ===
+        if tx
+            .send(RunMessage::CheckStarted {
+                check_type: CheckType::Verification,
+                max_iterations: MAX_FIX_ITERATIONS,
+            })
+            .await
+            .is_err()
+        {
+            warn!("TUI closed, aborting pipeline before verification");
+            return Ok((
+                state,
+                Err(CliError::InvalidState("TUI closed by user".to_string())),
+            ));
+        }
+
+        let (verification_result, verification_iterations) = run_check_fix_loop_with_tui(
+            &engine,
+            &ctx,
+            &CheckConfig::VERIFICATION,
+            CheckType::Verification,
+            &tx,
+        )
+        .await;
+
+        // Persist verification result to state
+        state.result.verification = Some(CheckResultState {
+            status: check_final_result_to_status(&verification_result),
+            iterations: verification_iterations,
+            completed_at: Utc::now(),
+            error: match &verification_result {
+                CheckFinalResult::Error(e) => Some(e.clone()),
+                _ => None,
+            },
+        });
+        state.save(&feature_dir)?;
+
+        let _ = tx
+            .send(RunMessage::CheckCompleted {
+                check_type: CheckType::Verification,
+                result: verification_result.clone(),
+            })
+            .await;
+
+        // Handle verification result - this is a harder fail
+        match &verification_result {
+            CheckFinalResult::Passed => {
+                info!("Verification passed");
+            }
+            CheckFinalResult::NeedsChanges(reason) => {
+                warn!("Verification needs changes: {}", reason);
+                save_failed_state(&mut state, &feature_dir, reason)?;
+                let _ = tx.send(RunMessage::Complete).await;
+                return Ok((
+                    state,
+                    Err(CliError::InvalidState(format!(
+                        "Verification failed: {}",
+                        reason
+                    ))),
+                ));
+            }
+            CheckFinalResult::Error(e) => {
+                warn!("Verification encountered error: {}", e);
+                // Continue despite error - let user decide
+            }
+            CheckFinalResult::Skipped(reason) => {
+                info!("Verification skipped: {}", reason);
+            }
+        }
+    }
+
+    // Check if TUI is still running before PR creation
+    if tx.is_closed() {
+        warn!("TUI closed, aborting pipeline before PR creation");
+        return Ok((
+            state,
+            Err(CliError::InvalidState("TUI closed by user".to_string())),
         ));
     }
 
@@ -472,6 +581,16 @@ async fn execute_full_pipeline_with_tui(
     let _ = tx.send(RunMessage::Complete).await;
 
     Ok((state, Ok(())))
+}
+
+/// Convert `CheckFinalResult` to `CheckResultStatus` for state persistence.
+fn check_final_result_to_status(result: &CheckFinalResult) -> CheckResultStatus {
+    match result {
+        CheckFinalResult::Passed => CheckResultStatus::Passed,
+        CheckFinalResult::NeedsChanges(_) => CheckResultStatus::NeedsChanges,
+        CheckFinalResult::Error(_) => CheckResultStatus::Error,
+        CheckFinalResult::Skipped(_) => CheckResultStatus::Skipped,
+    }
 }
 
 /// Execute phases (internal helper for `execute_full_pipeline_with_tui`).
@@ -634,14 +753,28 @@ async fn execute_phases_inner(
 ///
 /// This function performs the check-fix loop (review or verification)
 /// while sending progress updates to the TUI.
+///
+/// Returns a tuple of (result, iterations_performed).
 async fn run_check_fix_loop_with_tui(
     engine: &Engine<'_>,
     ctx: &TaskContext,
     config: &CheckConfig,
     check_type: CheckType,
     tx: &mpsc::Sender<RunMessage>,
-) -> CheckFinalResult {
+) -> (CheckFinalResult, u32) {
     for iteration in 1..=MAX_FIX_ITERATIONS {
+        // Check if TUI is closed before each iteration
+        if tx.is_closed() {
+            warn!(
+                "TUI closed, aborting {} at iteration {}",
+                config.name, iteration
+            );
+            return (
+                CheckFinalResult::Error("TUI closed by user".to_string()),
+                iteration,
+            );
+        }
+
         // Send iteration started
         let _ = tx
             .send(RunMessage::CheckIterationStarted {
@@ -665,7 +798,7 @@ async fn run_check_fix_loop_with_tui(
                             result: CheckIterationResult::Passed,
                         })
                         .await;
-                    return CheckFinalResult::Passed;
+                    return (CheckFinalResult::Passed, iteration);
                 } else if config.is_failure(&output) {
                     // Check found issues
                     let _ = tx
@@ -677,6 +810,12 @@ async fn run_check_fix_loop_with_tui(
                         .await;
 
                     if iteration < MAX_FIX_ITERATIONS {
+                        // Check if TUI is closed before attempting fix
+                        if tx.is_closed() {
+                            warn!("TUI closed, aborting {} before fix", config.name);
+                            return (CheckFinalResult::NeedsChanges(output), iteration);
+                        }
+
                         // Attempt to fix
                         let _ = tx
                             .send(RunMessage::FixStarted {
@@ -697,11 +836,14 @@ async fn run_check_fix_loop_with_tui(
                             .await;
                     } else {
                         // Max iterations reached
-                        return CheckFinalResult::NeedsChanges(format!(
-                            "{} still requires changes after {} fix iterations",
-                            capitalize_first(config.name),
-                            MAX_FIX_ITERATIONS
-                        ));
+                        return (
+                            CheckFinalResult::NeedsChanges(format!(
+                                "{} still requires changes after {} fix iterations",
+                                capitalize_first(config.name),
+                                MAX_FIX_ITERATIONS
+                            )),
+                            iteration,
+                        );
                     }
                 } else {
                     // No clear verdict, treat as passed
@@ -712,7 +854,7 @@ async fn run_check_fix_loop_with_tui(
                             result: CheckIterationResult::Passed,
                         })
                         .await;
-                    return CheckFinalResult::Passed;
+                    return (CheckFinalResult::Passed, iteration);
                 }
             }
             Err(e) => {
@@ -724,17 +866,20 @@ async fn run_check_fix_loop_with_tui(
                         result: CheckIterationResult::Error(e.to_string()),
                     })
                     .await;
-                return CheckFinalResult::Error(e.to_string());
+                return (CheckFinalResult::Error(e.to_string()), iteration);
             }
         }
     }
 
     // Should not reach here, but if we do, it means all iterations found issues
-    CheckFinalResult::NeedsChanges(format!(
-        "{} still requires changes after {} fix iterations",
-        capitalize_first(config.name),
-        MAX_FIX_ITERATIONS
-    ))
+    (
+        CheckFinalResult::NeedsChanges(format!(
+            "{} still requires changes after {} fix iterations",
+            capitalize_first(config.name),
+            MAX_FIX_ITERATIONS
+        )),
+        MAX_FIX_ITERATIONS,
+    )
 }
 
 /// Run a check (review or verification) with streaming output to TUI.

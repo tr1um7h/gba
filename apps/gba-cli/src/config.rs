@@ -49,17 +49,17 @@ fn default_review_provider() -> String {
 ///
 /// ```yaml
 /// agent:
-///   permission_mode: auto
-///   budget_limit: 10.0
+///   permissionMode: auto
+///   budgetLimit: 10.0
 /// git:
-///   auto_commit: true
-///   branch_pattern: "feature/{id}-{slug}"
+///   autoCommit: true
+///   branchPattern: "feature/{id}-{slug}"
 /// review:
 ///   enabled: true
 ///   provider: codex
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct GbaConfig {
     /// Agent configuration.
     #[serde(default)]
@@ -140,7 +140,7 @@ impl GbaConfig {
 
 /// Agent configuration options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
     /// Claude model to use (optional, SDK handles default).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,7 +167,7 @@ impl Default for AgentConfig {
 
 /// Prompt template configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct PromptsConfig {
     /// Additional prompt template directories to include.
     #[serde(default)]
@@ -176,7 +176,7 @@ pub struct PromptsConfig {
 
 /// Git configuration options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct GitConfig {
     /// Whether to auto-commit after each phase.
     #[serde(default = "default_auto_commit")]
@@ -200,7 +200,7 @@ impl Default for GitConfig {
 
 /// Code review configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct ReviewConfig {
     /// Whether code review is enabled.
     #[serde(default = "default_review_enabled")]
@@ -239,14 +239,14 @@ mod tests {
         let yaml = r#"
 agent:
   model: claude-sonnet-4-20250514
-  permission_mode: manual
-  budget_limit: 10.0
+  permissionMode: manual
+  budgetLimit: 10.0
 prompts:
   include:
     - ~/.config/gba/prompts
 git:
-  auto_commit: false
-  branch_pattern: "feat/{id}/{slug}"
+  autoCommit: false
+  branchPattern: "feat/{id}/{slug}"
 review:
   enabled: false
   provider: claude
@@ -271,8 +271,8 @@ review:
         let config = GbaConfig::default();
         let yaml = serde_yaml::to_string(&config).unwrap();
 
-        assert!(yaml.contains("permission_mode: auto"));
-        assert!(yaml.contains("auto_commit: true"));
+        assert!(yaml.contains("permissionMode: auto"));
+        assert!(yaml.contains("autoCommit: true"));
     }
 
     #[test]

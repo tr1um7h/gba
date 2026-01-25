@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Each task kind maps to a directory under `tasks/` containing
 /// the task configuration and prompt templates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum TaskKind {
     /// Initialize a repository for GBA.
