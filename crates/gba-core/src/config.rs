@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use claude_agent_sdk_rs::PermissionMode;
+use claude_agent_sdk_rs::{ClaudeAgentOptions, PermissionMode};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
@@ -112,6 +112,27 @@ impl std::fmt::Debug for EngineConfig<'_> {
     }
 }
 
+/// Merge base agent options into target options.
+///
+/// This copies non-None fields from `base` into `target`, allowing
+/// base configuration to be overridden by task-specific settings.
+///
+/// Fields merged: `model`, `permission_mode`, `max_turns`, `cwd`.
+pub fn merge_base_options(target: &mut ClaudeAgentOptions, base: &ClaudeAgentOptions) {
+    if base.model.is_some() {
+        target.model.clone_from(&base.model);
+    }
+    if base.permission_mode.is_some() {
+        target.permission_mode = base.permission_mode;
+    }
+    if base.max_turns.is_some() {
+        target.max_turns = base.max_turns;
+    }
+    if base.cwd.is_some() {
+        target.cwd.clone_from(&base.cwd);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +210,65 @@ disallowedTools:
 
         assert_eq!(config.workdir, PathBuf::from("/tmp/test"));
         assert!(config.agent_options.is_none());
+    }
+
+    #[test]
+    fn test_should_merge_base_options() {
+        let mut target = ClaudeAgentOptions::default();
+        let base = ClaudeAgentOptions {
+            model: Some("claude-3-opus".to_string()),
+            permission_mode: Some(PermissionMode::AcceptEdits),
+            max_turns: Some(10),
+            cwd: Some(PathBuf::from("/base/dir")),
+            ..Default::default()
+        };
+
+        merge_base_options(&mut target, &base);
+
+        assert_eq!(target.model, Some("claude-3-opus".to_string()));
+        assert_eq!(target.permission_mode, Some(PermissionMode::AcceptEdits));
+        assert_eq!(target.max_turns, Some(10));
+        assert_eq!(target.cwd, Some(PathBuf::from("/base/dir")));
+    }
+
+    #[test]
+    fn test_should_not_override_existing_options() {
+        let mut target = ClaudeAgentOptions {
+            model: Some("claude-3-sonnet".to_string()),
+            permission_mode: Some(PermissionMode::BypassPermissions),
+            ..Default::default()
+        };
+        let base = ClaudeAgentOptions {
+            model: Some("claude-3-opus".to_string()),
+            permission_mode: Some(PermissionMode::AcceptEdits),
+            max_turns: Some(10),
+            ..Default::default()
+        };
+
+        merge_base_options(&mut target, &base);
+
+        // Base options overwrite target (this is the intended behavior)
+        assert_eq!(target.model, Some("claude-3-opus".to_string()));
+        assert_eq!(target.permission_mode, Some(PermissionMode::AcceptEdits));
+        assert_eq!(target.max_turns, Some(10));
+    }
+
+    #[test]
+    fn test_should_skip_none_base_options() {
+        let mut target = ClaudeAgentOptions {
+            model: Some("claude-3-sonnet".to_string()),
+            ..Default::default()
+        };
+        let base = ClaudeAgentOptions {
+            // Only max_turns is set
+            max_turns: Some(5),
+            ..Default::default()
+        };
+
+        merge_base_options(&mut target, &base);
+
+        // Model should remain unchanged since base.model is None
+        assert_eq!(target.model, Some("claude-3-sonnet".to_string()));
+        assert_eq!(target.max_turns, Some(5));
     }
 }

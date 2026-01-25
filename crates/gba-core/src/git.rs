@@ -800,10 +800,18 @@ mod tests {
         let file_path = worktree_path.join("dirty-file.txt");
         fs::write(&file_path, "uncommitted content").expect("failed to write file");
 
-        // Stage the file in the worktree (need to set ceiling for worktree too)
+        // Stage the file in the worktree using isolated git command
+        // We use git_cmd_at_path to ensure proper isolation from parent repo
         let mut cmd = Command::new("git");
         cmd.current_dir(&worktree_path);
-        if let Some(parent) = worktree_path.parent() {
+        // Clear git environment variables that could interfere with test isolation
+        cmd.env_remove("GIT_DIR");
+        cmd.env_remove("GIT_WORK_TREE");
+        cmd.env_remove("GIT_INDEX_FILE");
+        cmd.env_remove("GIT_OBJECT_DIRECTORY");
+        cmd.env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
+        // Set ceiling to the temp dir's parent to prevent discovery of real repo
+        if let Some(parent) = temp_dir.path().parent() {
             cmd.env("GIT_CEILING_DIRECTORIES", parent);
         }
         cmd.args(["add", "dirty-file.txt"])

@@ -63,7 +63,7 @@ use futures::StreamExt;
 use tracing::{debug, info, instrument, trace};
 use uuid::Uuid;
 
-use crate::config::TaskConfig;
+use crate::config::{TaskConfig, merge_base_options};
 use crate::error::{EngineError, Result};
 use crate::event::EventHandler;
 use crate::task::TaskStats;
@@ -486,12 +486,7 @@ impl Session {
         self.stats.cost_usd += result_msg.total_cost_usd.unwrap_or(0.0);
 
         if let Some(usage) = &result_msg.usage {
-            if let Some(input) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
-                self.stats.input_tokens += input;
-            }
-            if let Some(output) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
-                self.stats.output_tokens += output;
-            }
+            self.stats.update_from_usage(usage, true);
         }
 
         trace!(
@@ -568,19 +563,8 @@ impl SessionBuilder {
         let mut options = ClaudeAgentOptions::default();
 
         // Apply base options
-        if let Some(base) = self.base_options {
-            if base.model.is_some() {
-                options.model = base.model;
-            }
-            if base.permission_mode.is_some() {
-                options.permission_mode = base.permission_mode;
-            }
-            if base.max_turns.is_some() {
-                options.max_turns = base.max_turns;
-            }
-            if base.cwd.is_some() {
-                options.cwd = base.cwd;
-            }
+        if let Some(ref base) = self.base_options {
+            merge_base_options(&mut options, base);
         }
 
         // Set working directory

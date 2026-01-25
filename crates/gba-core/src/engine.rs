@@ -61,7 +61,7 @@ use tracing::{debug, info, instrument, trace};
 
 use gba_pm::PromptManager;
 
-use crate::config::{EngineConfig, TaskConfig};
+use crate::config::{EngineConfig, TaskConfig, merge_base_options};
 use crate::error::{EngineError, Result};
 use crate::event::EventHandler;
 use crate::session::{Session, SessionBuilder};
@@ -491,18 +491,7 @@ impl<'a> Engine<'a> {
 
         // Apply base options if provided
         if let Some(ref base) = self.base_options {
-            if base.model.is_some() {
-                options.model = base.model.clone();
-            }
-            if base.permission_mode.is_some() {
-                options.permission_mode = base.permission_mode;
-            }
-            if base.max_turns.is_some() {
-                options.max_turns = base.max_turns;
-            }
-            if base.cwd.is_some() {
-                options.cwd = base.cwd.clone();
-            }
+            merge_base_options(&mut options, base);
         }
 
         // Set working directory if not already set
@@ -563,15 +552,8 @@ impl<'a> Engine<'a> {
                     stats.cost_usd = result.total_cost_usd.unwrap_or(0.0);
 
                     // Extract token usage if available
-                    if let Some(usage) = result.usage {
-                        if let Some(input) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
-                            stats.input_tokens = input;
-                        }
-                        if let Some(output_tokens) =
-                            usage.get("output_tokens").and_then(|v| v.as_u64())
-                        {
-                            stats.output_tokens = output_tokens;
-                        }
+                    if let Some(ref usage) = result.usage {
+                        stats.update_from_usage(usage, false);
                     }
 
                     success = !result.is_error;
@@ -632,13 +614,7 @@ impl<'a> Engine<'a> {
                 stats.cost_usd = result_msg.total_cost_usd.unwrap_or(0.0);
 
                 if let Some(ref usage) = result_msg.usage {
-                    if let Some(input) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
-                        stats.input_tokens = input;
-                    }
-                    if let Some(output_tokens) = usage.get("output_tokens").and_then(|v| v.as_u64())
-                    {
-                        stats.output_tokens = output_tokens;
-                    }
+                    stats.update_from_usage(usage, false);
                 }
 
                 *success = !result_msg.is_error;

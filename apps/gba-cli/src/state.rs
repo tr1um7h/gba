@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CliError;
 
+// Re-export TaskStats from gba-core
+pub use gba_core::TaskStats;
+
 /// Feature execution state.
 ///
 /// Tracks the complete state of a feature including progress, git info,
@@ -230,23 +233,6 @@ impl std::fmt::Display for PhaseStatus {
             Self::Failed => write!(f, "failed"),
         }
     }
-}
-
-/// Task execution statistics.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskStats {
-    /// Number of conversation turns.
-    pub turns: u32,
-
-    /// Total input tokens used.
-    pub input_tokens: u64,
-
-    /// Total output tokens generated.
-    pub output_tokens: u64,
-
-    /// Estimated cost in USD.
-    pub cost_usd: f64,
 }
 
 /// Final feature result.

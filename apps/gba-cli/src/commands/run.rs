@@ -17,9 +17,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::error::CliError;
-use crate::state::{
-    CheckResultState, CheckResultStatus, FeatureState, FeatureStatus, PhaseStatus, TaskStats,
-};
+use crate::state::{CheckResultState, CheckResultStatus, FeatureState, FeatureStatus, PhaseStatus};
 use crate::tui::{
     CheckFinalResult, CheckIterationResult, CheckType, RunApp, RunMessage, TuiEventHandler,
 };
@@ -709,12 +707,7 @@ async fn execute_phases_inner(
                 state.phases[phase_idx].status = PhaseStatus::Completed;
                 state.phases[phase_idx].completed_at = Some(Utc::now());
                 state.phases[phase_idx].commit_sha = commit_sha.clone();
-                state.phases[phase_idx].stats = Some(TaskStats {
-                    turns: result.stats.turns,
-                    input_tokens: result.stats.input_tokens,
-                    output_tokens: result.stats.output_tokens,
-                    cost_usd: result.stats.cost_usd,
-                });
+                state.phases[phase_idx].stats = Some(result.stats.clone());
 
                 // Update total stats
                 state.total_stats.turns += result.stats.turns;

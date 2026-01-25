@@ -168,7 +168,7 @@ pub mod git;
 pub mod session;
 mod task;
 
-pub use config::{EngineConfig, TaskConfig};
+pub use config::{EngineConfig, TaskConfig, merge_base_options};
 pub use engine::Engine;
 pub use error::{EngineError, Result};
 pub use session::{ConversationMessage, Session};

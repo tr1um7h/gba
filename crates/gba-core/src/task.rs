@@ -145,7 +145,8 @@ pub struct Artifact {
 }
 
 /// Statistics from task execution.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct TaskStats {
     /// Number of conversation turns.
@@ -159,6 +160,34 @@ pub struct TaskStats {
 
     /// Estimated cost in USD.
     pub cost_usd: f64,
+}
+
+impl TaskStats {
+    /// Update token usage from a usage value.
+    ///
+    /// This extracts `input_tokens` and `output_tokens` from the provided
+    /// JSON value (expected to be an object) and adds them to the current stats.
+    ///
+    /// # Arguments
+    ///
+    /// * `usage` - A JSON value containing token usage data
+    /// * `accumulate` - If true, adds to existing values; if false, replaces them
+    pub fn update_from_usage(&mut self, usage: &serde_json::Value, accumulate: bool) {
+        if let Some(input) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
+            if accumulate {
+                self.input_tokens += input;
+            } else {
+                self.input_tokens = input;
+            }
+        }
+        if let Some(output) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
+            if accumulate {
+                self.output_tokens += output;
+            } else {
+                self.output_tokens = output;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -221,5 +250,84 @@ mod tests {
 
         let kind: TaskKind = serde_json::from_str("{\"custom\":\"my_task\"}").unwrap();
         assert_eq!(kind, TaskKind::Custom("my_task".to_string()));
+    }
+
+    #[test]
+    fn test_should_update_from_usage_replace() {
+        let mut stats = TaskStats {
+            turns: 5,
+            input_tokens: 100,
+            output_tokens: 50,
+            cost_usd: 0.01,
+        };
+
+        let usage = json!({
+            "input_tokens": 200,
+            "output_tokens": 100
+        });
+        stats.update_from_usage(&usage, false);
+
+        assert_eq!(stats.input_tokens, 200);
+        assert_eq!(stats.output_tokens, 100);
+        // turns and cost_usd should remain unchanged
+        assert_eq!(stats.turns, 5);
+        assert!((stats.cost_usd - 0.01).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_should_update_from_usage_accumulate() {
+        let mut stats = TaskStats {
+            turns: 5,
+            input_tokens: 100,
+            output_tokens: 50,
+            cost_usd: 0.01,
+        };
+
+        let usage = json!({
+            "input_tokens": 200,
+            "output_tokens": 100
+        });
+        stats.update_from_usage(&usage, true);
+
+        assert_eq!(stats.input_tokens, 300);
+        assert_eq!(stats.output_tokens, 150);
+    }
+
+    #[test]
+    fn test_should_handle_missing_usage_fields() {
+        let mut stats = TaskStats {
+            input_tokens: 100,
+            output_tokens: 50,
+            ..Default::default()
+        };
+
+        let usage = json!({
+            "input_tokens": 200
+            // output_tokens is missing
+        });
+        stats.update_from_usage(&usage, false);
+
+        assert_eq!(stats.input_tokens, 200);
+        // output_tokens should remain unchanged
+        assert_eq!(stats.output_tokens, 50);
+    }
+
+    #[test]
+    fn test_task_stats_serialization() {
+        let stats = TaskStats {
+            turns: 10,
+            input_tokens: 1000,
+            output_tokens: 500,
+            cost_usd: 0.05,
+        };
+
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("\"inputTokens\":1000"));
+        assert!(json.contains("\"outputTokens\":500"));
+
+        let deserialized: TaskStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.turns, 10);
+        assert_eq!(deserialized.input_tokens, 1000);
+        assert_eq!(deserialized.output_tokens, 500);
     }
 }
