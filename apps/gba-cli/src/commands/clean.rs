@@ -4,7 +4,7 @@
 //! closed or merged.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use tracing::{debug, info, warn};
 
@@ -181,9 +181,12 @@ fn get_worktree_branch(worktree_path: &Path) -> Result<Option<String>, CliError>
 /// Get PR status for a branch using gh CLI.
 fn get_pr_status(workdir: &Path, branch: &str) -> Result<Option<PrStatus>, CliError> {
     // Use gh pr view to get PR status
+    // Suppress stderr to prevent progress indicators from messing up console output
     let output = Command::new("gh")
         .current_dir(workdir)
         .args(["pr", "view", branch, "--json", "state", "--jq", ".state"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
         .output()
         .map_err(|e| CliError::Git(format!("failed to run gh pr view: {}", e)))?;
 
