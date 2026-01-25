@@ -4,6 +4,7 @@
 //! including phase execution, auto-commit, code review, verification,
 //! and PR creation with resume support.
 
+use std::future::Future;
 use std::path::Path;
 
 use chrono::Utc;
@@ -15,6 +16,155 @@ use tracing::{debug, info, warn};
 use crate::error::CliError;
 use crate::state::{FeatureState, FeatureStatus, PhaseStatus};
 use crate::utils;
+
+/// Maximum number of fix iterations for review and verification loops.
+const MAX_FIX_ITERATIONS: u32 = 3;
+
+/// Configuration for a check-fix loop (review or verification).
+#[derive(Debug, Clone)]
+struct CheckConfig {
+    /// Display name for the check (e.g., "code review" or "verification").
+    name: &'static str,
+    /// Keywords indicating the check passed.
+    success_keywords: &'static [&'static str],
+    /// Keywords indicating the check needs changes.
+    failure_keywords: &'static [&'static str],
+    /// Message to display when the check passes.
+    pass_message: &'static str,
+    /// Message to display when the check fails.
+    fail_message: &'static str,
+}
+
+impl CheckConfig {
+    /// Configuration for code review checks.
+    const REVIEW: Self = Self {
+        name: "code review",
+        success_keywords: &["APPROVED"],
+        failure_keywords: &["NEEDS_CHANGES"],
+        pass_message: "Code review: APPROVED",
+        fail_message: "Code review: NEEDS_CHANGES",
+    };
+
+    /// Configuration for verification checks.
+    const VERIFICATION: Self = Self {
+        name: "verification",
+        success_keywords: &["VERIFIED"],
+        failure_keywords: &["FAILED"],
+        pass_message: "Verification: PASSED",
+        fail_message: "Verification: FAILED",
+    };
+
+    /// Check if the output indicates success.
+    fn is_success(&self, output: &str) -> bool {
+        self.success_keywords.iter().any(|kw| output.contains(kw))
+    }
+
+    /// Check if the output indicates failure.
+    fn is_failure(&self, output: &str) -> bool {
+        self.failure_keywords.iter().any(|kw| output.contains(kw))
+    }
+}
+
+/// Run a check-fix loop with the given configuration.
+///
+/// This function abstracts the common pattern of running a check (review or verification),
+/// and if it fails, attempting to fix the issues up to `MAX_FIX_ITERATIONS` times.
+///
+/// # Arguments
+///
+/// * `config` - Configuration for the check type
+/// * `check_fn` - Async function that performs the check and returns the output
+/// * `fix_fn` - Async function that attempts to fix issues based on feedback (takes owned String)
+///
+/// # Returns
+///
+/// Returns `true` if the check passed, `false` if it failed after max iterations.
+async fn run_check_fix_loop<C, F, CF, FF>(
+    config: &CheckConfig,
+    check_fn: C,
+    fix_fn: F,
+) -> Result<bool, CliError>
+where
+    C: Fn() -> CF,
+    CF: Future<Output = Result<String, CliError>>,
+    F: Fn(String) -> FF,
+    FF: Future<Output = Result<String, CliError>>,
+{
+    for iteration in 1..=MAX_FIX_ITERATIONS {
+        let check_result = check_fn().await;
+        match check_result {
+            Ok(output) => {
+                println!();
+                println!(
+                    "=== {} Result (iteration {}/{}) ===",
+                    capitalize_first(config.name),
+                    iteration,
+                    MAX_FIX_ITERATIONS
+                );
+                println!("{}", output);
+
+                if config.is_success(&output) {
+                    println!();
+                    println!("{}", config.pass_message);
+                    return Ok(true);
+                } else if config.is_failure(&output) {
+                    println!();
+                    println!("{}", config.fail_message);
+
+                    if iteration < MAX_FIX_ITERATIONS {
+                        println!(
+                            "Attempting to fix issues (iteration {}/{})...",
+                            iteration, MAX_FIX_ITERATIONS
+                        );
+
+                        match fix_fn(output).await {
+                            Ok(fix_output) => {
+                                println!();
+                                println!("=== Fix Result ===");
+                                println!("{}", fix_output);
+                            }
+                            Err(e) => {
+                                warn!("Fix attempt failed: {}", e);
+                                println!("Warning: Fix attempt failed: {}", e);
+                            }
+                        }
+                    } else {
+                        println!(
+                            "Max fix iterations reached. {} still requires changes.",
+                            capitalize_first(config.name)
+                        );
+                    }
+                } else {
+                    // No clear verdict, treat as passed
+                    println!();
+                    println!(
+                        "{}: No blocking issues found",
+                        capitalize_first(config.name)
+                    );
+                    return Ok(true);
+                }
+            }
+            Err(e) => {
+                warn!("{} failed: {}", capitalize_first(config.name), e);
+                println!("Warning: {} failed: {}", capitalize_first(config.name), e);
+                println!("Continuing...");
+                // Don't block on check errors
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+/// Capitalize the first letter of a string.
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
 
 /// Run options for the execution pipeline.
 #[derive(Debug)]
@@ -150,80 +300,17 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     match result {
         Ok(()) => {
             // All phases completed, run review and verification with fix loops
-            const MAX_FIX_ITERATIONS: u32 = 3;
 
             // === Code Review Loop ===
             println!();
             println!("All phases completed. Running code review...");
 
-            let mut review_passed = false;
-            for iteration in 1..=MAX_FIX_ITERATIONS {
-                let review_result = run_review(&engine, workdir, &state).await;
-                match review_result {
-                    Ok(review_output) => {
-                        println!();
-                        println!(
-                            "=== Code Review Result (iteration {}/{}) ===",
-                            iteration, MAX_FIX_ITERATIONS
-                        );
-                        println!("{}", review_output);
-
-                        if review_output.contains("APPROVED") {
-                            println!();
-                            println!("Code review: APPROVED");
-                            review_passed = true;
-                            break;
-                        } else if review_output.contains("NEEDS_CHANGES") {
-                            println!();
-                            println!("Code review: NEEDS_CHANGES");
-
-                            if iteration < MAX_FIX_ITERATIONS {
-                                println!(
-                                    "Attempting to fix issues (iteration {}/{})...",
-                                    iteration, MAX_FIX_ITERATIONS
-                                );
-
-                                match run_fix(
-                                    &engine,
-                                    workdir,
-                                    &state,
-                                    "code review",
-                                    &review_output,
-                                )
-                                .await
-                                {
-                                    Ok(fix_output) => {
-                                        println!();
-                                        println!("=== Fix Result ===");
-                                        println!("{}", fix_output);
-                                    }
-                                    Err(e) => {
-                                        warn!("Fix attempt failed: {}", e);
-                                        println!("Warning: Fix attempt failed: {}", e);
-                                    }
-                                }
-                            } else {
-                                println!(
-                                    "Max fix iterations reached. Review still requires changes."
-                                );
-                            }
-                        } else {
-                            // No clear verdict, treat as passed
-                            println!();
-                            println!("Code review: No blocking issues found");
-                            review_passed = true;
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Code review failed: {}", e);
-                        println!("Warning: Code review failed: {}", e);
-                        println!("Continuing with verification...");
-                        review_passed = true; // Don't block on review errors
-                        break;
-                    }
-                }
-            }
+            let review_passed = run_check_fix_loop(
+                &CheckConfig::REVIEW,
+                || run_review(&engine, workdir, &state),
+                |feedback| run_fix(&engine, workdir, &state, "code review", feedback),
+            )
+            .await?;
 
             if !review_passed {
                 state.status = FeatureStatus::Failed;
@@ -238,65 +325,12 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
             println!();
             println!("Running verification...");
 
-            let mut verification_passed = false;
-            for iteration in 1..=MAX_FIX_ITERATIONS {
-                let verify_result = run_verification(&engine, workdir, &state).await;
-                match verify_result {
-                    Ok(verify_output) => {
-                        println!();
-                        println!(
-                            "=== Verification Result (iteration {}/{}) ===",
-                            iteration, MAX_FIX_ITERATIONS
-                        );
-                        println!("{}", verify_output);
-
-                        if verify_output.contains("VERIFIED") || !verify_output.contains("FAILED") {
-                            println!();
-                            println!("Verification: PASSED");
-                            verification_passed = true;
-                            break;
-                        } else if verify_output.contains("FAILED") {
-                            println!();
-                            println!("Verification: FAILED");
-
-                            if iteration < MAX_FIX_ITERATIONS {
-                                println!(
-                                    "Attempting to fix issues (iteration {}/{})...",
-                                    iteration, MAX_FIX_ITERATIONS
-                                );
-
-                                match run_fix(
-                                    &engine,
-                                    workdir,
-                                    &state,
-                                    "verification",
-                                    &verify_output,
-                                )
-                                .await
-                                {
-                                    Ok(fix_output) => {
-                                        println!();
-                                        println!("=== Fix Result ===");
-                                        println!("{}", fix_output);
-                                    }
-                                    Err(e) => {
-                                        warn!("Fix attempt failed: {}", e);
-                                        println!("Warning: Fix attempt failed: {}", e);
-                                    }
-                                }
-                            } else {
-                                println!("Max fix iterations reached. Verification still failing.");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Verification failed: {}", e);
-                        println!("Warning: Verification failed: {}", e);
-                        verification_passed = true; // Don't block on verification errors
-                        break;
-                    }
-                }
-            }
+            let verification_passed = run_check_fix_loop(
+                &CheckConfig::VERIFICATION,
+                || run_verification(&engine, workdir, &state),
+                |feedback| run_fix(&engine, workdir, &state, "verification", feedback),
+            )
+            .await?;
 
             if !verification_passed {
                 state.status = FeatureStatus::Failed;
@@ -562,7 +596,7 @@ async fn run_fix(
     workdir: &Path,
     state: &FeatureState,
     fix_type: &str,
-    feedback: &str,
+    feedback: String,
 ) -> Result<String, CliError> {
     let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
     let context = json!({
