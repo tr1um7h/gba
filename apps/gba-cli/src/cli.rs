@@ -93,6 +93,23 @@ pub enum Command {
         /// Feature slug to show status for.
         slug: String,
     },
+
+    /// Clean up worktrees for closed/merged PRs.
+    ///
+    /// Scans existing git worktrees, checks their PR status, and removes
+    /// worktrees and branches for PRs that have been merged or closed.
+    Clean {
+        /// Dry run mode (show what would be cleaned without actually cleaning).
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Also clean worktrees for closed (not merged) PRs.
+        ///
+        /// By default, only merged PRs are cleaned. Use this flag to also
+        /// clean PRs that were closed without merging.
+        #[arg(long, short)]
+        force: bool,
+    },
 }
 
 #[cfg(test)]
@@ -160,5 +177,30 @@ mod tests {
             .expect("should parse with global options");
         assert!(cli.verbose);
         assert_eq!(cli.workdir, Some(PathBuf::from("/tmp/repo")));
+    }
+
+    #[test]
+    fn test_should_parse_clean_command() {
+        let cli = Cli::try_parse_from(["gba", "clean"]).expect("should parse clean");
+        match cli.command {
+            Command::Clean { dry_run, force } => {
+                assert!(!dry_run);
+                assert!(!force);
+            }
+            _ => panic!("expected Clean command"),
+        }
+    }
+
+    #[test]
+    fn test_should_parse_clean_command_with_options() {
+        let cli = Cli::try_parse_from(["gba", "clean", "--dry-run", "--force"])
+            .expect("should parse clean with options");
+        match cli.command {
+            Command::Clean { dry_run, force } => {
+                assert!(dry_run);
+                assert!(force);
+            }
+            _ => panic!("expected Clean command"),
+        }
     }
 }

@@ -63,6 +63,9 @@ async fn main() -> Result<()> {
             };
             commands::run_run(&workdir, &slug, options).await?;
         }
+        Command::Clean { dry_run, force } => {
+            commands::run_clean(&workdir, dry_run, force).await?;
+        }
     }
 
     Ok(())
