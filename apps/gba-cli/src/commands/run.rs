@@ -7,7 +7,6 @@
 //! The execution uses a TUI to display progress with streaming output
 //! that clears between phases (not accumulates).
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -18,7 +17,9 @@ use tracing::{info, warn};
 
 use crate::error::CliError;
 use crate::state::{FeatureState, FeatureStatus, PhaseStatus, TaskStats};
-use crate::tui::{RunApp, RunMessage, TuiEventHandler};
+use crate::tui::{
+    CheckFinalResult, CheckIterationResult, CheckType, RunApp, RunMessage, TuiEventHandler,
+};
 use crate::utils;
 
 /// Maximum number of fix iterations for review and verification loops.
@@ -33,10 +34,6 @@ struct CheckConfig {
     success_keywords: &'static [&'static str],
     /// Keywords indicating the check needs changes.
     failure_keywords: &'static [&'static str],
-    /// Message to display when the check passes.
-    pass_message: &'static str,
-    /// Message to display when the check fails.
-    fail_message: &'static str,
 }
 
 impl CheckConfig {
@@ -45,8 +42,6 @@ impl CheckConfig {
         name: "code review",
         success_keywords: &["APPROVED"],
         failure_keywords: &["NEEDS_CHANGES"],
-        pass_message: "Code review: APPROVED",
-        fail_message: "Code review: NEEDS_CHANGES",
     };
 
     /// Configuration for verification checks.
@@ -54,8 +49,6 @@ impl CheckConfig {
         name: "verification",
         success_keywords: &["VERIFIED"],
         failure_keywords: &["FAILED"],
-        pass_message: "Verification: PASSED",
-        fail_message: "Verification: FAILED",
     };
 
     /// Check if the output indicates success using strict pattern matching.
@@ -154,22 +147,6 @@ fn contains_word(text: &str, word: &str) -> bool {
     false
 }
 
-/// Result of a check-fix loop iteration.
-///
-/// This enum provides proper semantics for distinguishing between:
-/// - A check that passed (the code is good)
-/// - A check that found issues (needs changes)
-/// - A check that failed to run (error in the check itself)
-#[derive(Debug)]
-enum CheckResult {
-    /// Check passed successfully.
-    Passed,
-    /// Check ran but found issues that need to be addressed.
-    NeedsChanges(String),
-    /// Check itself failed to run (e.g., network error, tool unavailable).
-    Error(CliError),
-}
-
 /// Context for task execution, holding commonly used paths and identifiers.
 ///
 /// This struct eliminates repeated calculation of `worktree_path` and provides
@@ -202,106 +179,6 @@ impl TaskContext {
             "feature_slug": self.feature_slug,
         })
     }
-}
-
-/// Run a check-fix loop with the given configuration.
-///
-/// This function abstracts the common pattern of running a check (review or verification),
-/// and if it fails, attempting to fix the issues up to `MAX_FIX_ITERATIONS` times.
-///
-/// # Arguments
-///
-/// * `config` - Configuration for the check type
-/// * `check_fn` - Async function that performs the check and returns the output
-/// * `fix_fn` - Async function that attempts to fix issues based on feedback (takes owned String)
-///
-/// # Returns
-///
-/// Returns `CheckResult` indicating whether the check passed, needs changes, or encountered an error.
-async fn run_check_fix_loop<C, F, CF, FF>(
-    config: &CheckConfig,
-    check_fn: C,
-    fix_fn: F,
-) -> CheckResult
-where
-    C: Fn() -> CF,
-    CF: Future<Output = Result<String, CliError>>,
-    F: Fn(String) -> FF,
-    FF: Future<Output = Result<String, CliError>>,
-{
-    for iteration in 1..=MAX_FIX_ITERATIONS {
-        let check_result = check_fn().await;
-        match check_result {
-            Ok(output) => {
-                println!();
-                println!(
-                    "=== {} Result (iteration {}/{}) ===",
-                    capitalize_first(config.name),
-                    iteration,
-                    MAX_FIX_ITERATIONS
-                );
-                println!("{}", output);
-
-                if config.is_success(&output) {
-                    println!();
-                    println!("{}", config.pass_message);
-                    return CheckResult::Passed;
-                } else if config.is_failure(&output) {
-                    println!();
-                    println!("{}", config.fail_message);
-
-                    if iteration < MAX_FIX_ITERATIONS {
-                        println!(
-                            "Attempting to fix issues (iteration {}/{})...",
-                            iteration, MAX_FIX_ITERATIONS
-                        );
-
-                        match fix_fn(output).await {
-                            Ok(fix_output) => {
-                                println!();
-                                println!("=== Fix Result ===");
-                                println!("{}", fix_output);
-                            }
-                            Err(e) => {
-                                warn!("Fix attempt failed: {}", e);
-                                println!("Warning: Fix attempt failed: {}", e);
-                            }
-                        }
-                    } else {
-                        println!(
-                            "Max fix iterations reached. {} still requires changes.",
-                            capitalize_first(config.name)
-                        );
-                        return CheckResult::NeedsChanges(format!(
-                            "{} still requires changes after {} fix iterations",
-                            capitalize_first(config.name),
-                            MAX_FIX_ITERATIONS
-                        ));
-                    }
-                } else {
-                    // No clear verdict, treat as passed
-                    println!();
-                    println!(
-                        "{}: No blocking issues found",
-                        capitalize_first(config.name)
-                    );
-                    return CheckResult::Passed;
-                }
-            }
-            Err(e) => {
-                warn!("{} failed: {}", capitalize_first(config.name), e);
-                println!("Warning: {} failed: {}", capitalize_first(config.name), e);
-                return CheckResult::Error(e);
-            }
-        }
-    }
-
-    // Should not reach here, but if we do, it means all iterations found issues
-    CheckResult::NeedsChanges(format!(
-        "{} still requires changes after {} fix iterations",
-        capitalize_first(config.name),
-        MAX_FIX_ITERATIONS
-    ))
 }
 
 /// Capitalize the first letter of a string.
@@ -362,11 +239,11 @@ struct TuiExecutionContext {
 /// 1. Load and validate feature state
 /// 2. Detect resume point or start fresh
 /// 3. Execute remaining phases with auto-commit (shown in TUI)
-/// 4. Run code review
-/// 5. Run verification
-/// 6. Create pull request
+/// 4. Run code review (shown in TUI)
+/// 5. Run verification (shown in TUI)
+/// 6. Create pull request (shown in TUI)
 ///
-/// The phase execution uses a TUI to display progress with streaming output
+/// All stages are displayed in the TUI with streaming output
 /// that clears between phases for better readability.
 ///
 /// # Errors
@@ -415,9 +292,9 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
         dry_run,
     };
 
-    // Spawn execution worker
+    // Spawn execution worker that handles the full pipeline
     let worker_handle =
-        tokio::spawn(async move { execute_phases_with_tui(exec_ctx, state, tx).await });
+        tokio::spawn(async move { execute_full_pipeline_with_tui(exec_ctx, state, tx).await });
 
     // Run TUI event loop (blocks until complete or error)
     app.run(rx).await?;
@@ -427,38 +304,33 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
         .await
         .map_err(|e| CliError::InvalidState(format!("worker task panicked: {}", e)))?;
 
-    let (mut state, phase_result) = worker_result?;
+    let (state, pipeline_result) = worker_result?;
 
-    // Handle phase execution failure
-    if let Err(ref e) = phase_result {
-        save_failed_state(&mut state, &feature_dir, &e.to_string())?;
+    // Handle pipeline failure
+    if let Err(ref e) = pipeline_result {
+        // State was already saved in the worker, just log
+        warn!("Pipeline failed: {}", e);
     }
 
-    phase_result?;
+    // Print final summary (always, even on failure)
+    print_execution_summary(&state);
 
-    // Create engine for review and verification (non-TUI, non-streaming)
-    let engine = utils::create_engine_with_context(workdir, &ctx.worktree_path)?;
-
-    // Run review and verification
-    if let Err(reason) = run_review_and_verification(&engine, &ctx, &mut state, &feature_dir).await
-    {
-        save_failed_state(&mut state, &feature_dir, &reason)?;
-        return Ok(());
-    }
-
-    // Finalize execution (create PR and print summary)
-    finalize_execution(&engine, &ctx, &mut state, &feature_dir, dry_run).await?;
+    pipeline_result?;
 
     Ok(())
 }
 
-/// Execute phases with TUI integration.
+/// Execute the full pipeline with TUI integration.
 ///
 /// This function runs in a spawned task and sends `RunMessage` events
-/// to the TUI via the provided channel.
+/// to the TUI via the provided channel. It handles:
+/// 1. Phase execution
+/// 2. Code review with fix loop
+/// 3. Verification with fix loop
+/// 4. PR creation
 ///
-/// Returns the updated state and the result of phase execution.
-async fn execute_phases_with_tui(
+/// Returns the updated state and the result of the pipeline.
+async fn execute_full_pipeline_with_tui(
     exec_ctx: TuiExecutionContext,
     mut state: FeatureState,
     tx: mpsc::Sender<RunMessage>,
@@ -475,6 +347,149 @@ async fn execute_phases_with_tui(
     // Create engine with worktree as working directory
     let engine = utils::create_engine_with_context(&workdir, &ctx.worktree_path)?;
 
+    // === Phase 1: Execute phases ===
+    let phase_result = execute_phases_inner(
+        &engine,
+        &ctx,
+        &feature_dir,
+        &mut state,
+        start_phase,
+        is_resuming,
+        dry_run,
+        &tx,
+    )
+    .await;
+
+    if let Err(ref e) = phase_result {
+        save_failed_state(&mut state, &feature_dir, &e.to_string())?;
+        let _ = tx.send(RunMessage::Complete).await;
+        return Ok((state, phase_result));
+    }
+
+    // === Phase 2: Code Review ===
+    let _ = tx
+        .send(RunMessage::CheckStarted {
+            check_type: CheckType::Review,
+            max_iterations: MAX_FIX_ITERATIONS,
+        })
+        .await;
+
+    let review_result =
+        run_check_fix_loop_with_tui(&engine, &ctx, &CheckConfig::REVIEW, CheckType::Review, &tx)
+            .await;
+
+    let _ = tx
+        .send(RunMessage::CheckCompleted {
+            check_type: CheckType::Review,
+            result: review_result.clone(),
+        })
+        .await;
+
+    // Check if review failed with needs_changes (soft fail, continue)
+    if let CheckFinalResult::NeedsChanges(ref reason) = review_result {
+        warn!("Code review needs changes: {}", reason);
+        // Don't fail the pipeline, continue to verification
+    }
+
+    // === Phase 3: Verification ===
+    let _ = tx
+        .send(RunMessage::CheckStarted {
+            check_type: CheckType::Verification,
+            max_iterations: MAX_FIX_ITERATIONS,
+        })
+        .await;
+
+    let verification_result = run_check_fix_loop_with_tui(
+        &engine,
+        &ctx,
+        &CheckConfig::VERIFICATION,
+        CheckType::Verification,
+        &tx,
+    )
+    .await;
+
+    let _ = tx
+        .send(RunMessage::CheckCompleted {
+            check_type: CheckType::Verification,
+            result: verification_result.clone(),
+        })
+        .await;
+
+    // Check if verification failed with needs_changes (this is a harder fail)
+    if let CheckFinalResult::NeedsChanges(ref reason) = verification_result {
+        warn!("Verification needs changes: {}", reason);
+        save_failed_state(&mut state, &feature_dir, reason)?;
+        let _ = tx.send(RunMessage::Complete).await;
+        return Ok((
+            state,
+            Err(CliError::InvalidState(format!(
+                "Verification failed: {}",
+                reason
+            ))),
+        ));
+    }
+
+    // === Phase 4: PR Creation ===
+    if dry_run {
+        let _ = tx
+            .send(RunMessage::Activity(
+                "Dry run: Skipping PR creation".to_string(),
+            ))
+            .await;
+    } else {
+        let _ = tx.send(RunMessage::PrCreationStarted).await;
+
+        match create_pull_request(&engine, &ctx, &mut state).await {
+            Ok(pr_url) => {
+                state.result.pr_url = Some(pr_url.clone());
+                state.status = FeatureStatus::Completed;
+                let _ = tx
+                    .send(RunMessage::PrCreationCompleted {
+                        pr_url: Some(pr_url),
+                    })
+                    .await;
+            }
+            Err(e) => {
+                warn!("Failed to create PR: {}", e);
+                let _ = tx
+                    .send(RunMessage::PrCreationCompleted { pr_url: None })
+                    .await;
+                let _ = tx
+                    .send(RunMessage::Activity(format!("PR creation failed: {}", e)))
+                    .await;
+            }
+        }
+    }
+
+    // Update final state
+    state.feature.updated_at = Utc::now();
+    if state.status != FeatureStatus::Completed {
+        state.status = FeatureStatus::Completed;
+    }
+    state.save(&feature_dir)?;
+
+    // Send complete signal
+    let _ = tx.send(RunMessage::Complete).await;
+
+    Ok((state, Ok(())))
+}
+
+/// Execute phases (internal helper for `execute_full_pipeline_with_tui`).
+///
+/// This helper function requires many parameters because it needs access to
+/// execution context, state, and the TUI channel. Using a struct would
+/// complicate the borrowed lifetimes unnecessarily.
+#[allow(clippy::too_many_arguments)]
+async fn execute_phases_inner(
+    engine: &Engine<'_>,
+    ctx: &TaskContext,
+    feature_dir: &Path,
+    state: &mut FeatureState,
+    start_phase: usize,
+    is_resuming: bool,
+    dry_run: bool,
+    tx: &mpsc::Sender<RunMessage>,
+) -> Result<(), CliError> {
     let total_phases = state.phases.len();
 
     for phase_idx in start_phase..total_phases {
@@ -490,10 +505,7 @@ async fn execute_phases_with_tui(
             .is_err()
         {
             // TUI closed, abort execution
-            return Ok((
-                state,
-                Err(CliError::InvalidState("TUI channel closed".to_string())),
-            ));
+            return Err(CliError::InvalidState("TUI channel closed".to_string()));
         }
 
         // Mark phase as in progress
@@ -501,7 +513,7 @@ async fn execute_phases_with_tui(
         state.phases[phase_idx].status = PhaseStatus::InProgress;
         state.phases[phase_idx].started_at = Some(Utc::now());
         state.feature.updated_at = Utc::now();
-        state.save(&feature_dir)?;
+        state.save(feature_dir)?;
 
         // Build context for the execute task
         let phases_context: Vec<serde_json::Value> = state
@@ -548,17 +560,14 @@ async fn execute_phases_with_tui(
 
                     state.phases[phase_idx].status = PhaseStatus::Failed;
                     state.feature.updated_at = Utc::now();
-                    state.save(&feature_dir)?;
+                    state.save(feature_dir)?;
 
-                    // Send complete signal
-                    let _ = tx.send(RunMessage::Complete).await;
-
-                    return Ok((state, Err(CliError::InvalidState(error_msg))));
+                    return Err(CliError::InvalidState(error_msg));
                 }
 
                 // Get commit SHA if auto-commit was done
                 let commit_sha = if !dry_run {
-                    get_latest_commit_sha(&ctx)?
+                    get_latest_commit_sha(ctx)?
                 } else {
                     None
                 };
@@ -581,7 +590,7 @@ async fn execute_phases_with_tui(
                 state.total_stats.cost_usd += result.stats.cost_usd;
 
                 state.feature.updated_at = Utc::now();
-                state.save(&feature_dir)?;
+                state.save(feature_dir)?;
 
                 // Send phase completed message
                 let _ = tx
@@ -611,20 +620,172 @@ async fn execute_phases_with_tui(
 
                 state.phases[phase_idx].status = PhaseStatus::Failed;
                 state.feature.updated_at = Utc::now();
-                state.save(&feature_dir)?;
+                state.save(feature_dir)?;
 
-                // Send complete signal
-                let _ = tx.send(RunMessage::Complete).await;
-
-                return Ok((state, Err(CliError::from(e))));
+                return Err(CliError::from(e));
             }
         }
     }
 
-    // All phases completed successfully
-    let _ = tx.send(RunMessage::Complete).await;
+    Ok(())
+}
 
-    Ok((state, Ok(())))
+/// Run a check-fix loop with TUI message sending.
+///
+/// This function performs the check-fix loop (review or verification)
+/// while sending progress updates to the TUI.
+async fn run_check_fix_loop_with_tui(
+    engine: &Engine<'_>,
+    ctx: &TaskContext,
+    config: &CheckConfig,
+    check_type: CheckType,
+    tx: &mpsc::Sender<RunMessage>,
+) -> CheckFinalResult {
+    for iteration in 1..=MAX_FIX_ITERATIONS {
+        // Send iteration started
+        let _ = tx
+            .send(RunMessage::CheckIterationStarted {
+                check_type,
+                iteration,
+                max_iterations: MAX_FIX_ITERATIONS,
+            })
+            .await;
+
+        // Run the check with streaming output
+        let check_result = run_check_with_streaming(engine, ctx, config, tx).await;
+
+        match check_result {
+            Ok(output) => {
+                if config.is_success(&output) {
+                    // Check passed
+                    let _ = tx
+                        .send(RunMessage::CheckIterationResult {
+                            check_type,
+                            iteration,
+                            result: CheckIterationResult::Passed,
+                        })
+                        .await;
+                    return CheckFinalResult::Passed;
+                } else if config.is_failure(&output) {
+                    // Check found issues
+                    let _ = tx
+                        .send(RunMessage::CheckIterationResult {
+                            check_type,
+                            iteration,
+                            result: CheckIterationResult::NeedsChanges(output.clone()),
+                        })
+                        .await;
+
+                    if iteration < MAX_FIX_ITERATIONS {
+                        // Attempt to fix
+                        let _ = tx
+                            .send(RunMessage::FixStarted {
+                                check_type,
+                                iteration,
+                            })
+                            .await;
+
+                        let fix_success =
+                            run_fix_with_streaming(engine, ctx, config.name, output, tx).await;
+
+                        let _ = tx
+                            .send(RunMessage::FixCompleted {
+                                check_type,
+                                iteration,
+                                success: fix_success,
+                            })
+                            .await;
+                    } else {
+                        // Max iterations reached
+                        return CheckFinalResult::NeedsChanges(format!(
+                            "{} still requires changes after {} fix iterations",
+                            capitalize_first(config.name),
+                            MAX_FIX_ITERATIONS
+                        ));
+                    }
+                } else {
+                    // No clear verdict, treat as passed
+                    let _ = tx
+                        .send(RunMessage::CheckIterationResult {
+                            check_type,
+                            iteration,
+                            result: CheckIterationResult::Passed,
+                        })
+                        .await;
+                    return CheckFinalResult::Passed;
+                }
+            }
+            Err(e) => {
+                // Check itself failed to run
+                let _ = tx
+                    .send(RunMessage::CheckIterationResult {
+                        check_type,
+                        iteration,
+                        result: CheckIterationResult::Error(e.to_string()),
+                    })
+                    .await;
+                return CheckFinalResult::Error(e.to_string());
+            }
+        }
+    }
+
+    // Should not reach here, but if we do, it means all iterations found issues
+    CheckFinalResult::NeedsChanges(format!(
+        "{} still requires changes after {} fix iterations",
+        capitalize_first(config.name),
+        MAX_FIX_ITERATIONS
+    ))
+}
+
+/// Run a check (review or verification) with streaming output to TUI.
+async fn run_check_with_streaming(
+    engine: &Engine<'_>,
+    ctx: &TaskContext,
+    config: &CheckConfig,
+    tx: &mpsc::Sender<RunMessage>,
+) -> Result<String, CliError> {
+    let task_kind = match config.name {
+        "code review" => TaskKind::Review,
+        "verification" => TaskKind::Verification,
+        _ => {
+            return Err(CliError::InvalidState(format!(
+                "unknown check type: {}",
+                config.name
+            )));
+        }
+    };
+
+    let task = Task::new(task_kind, ctx.base_context());
+    let mut handler = TuiEventHandler::new(tx.clone());
+    let result = engine.run_stream(task, &mut handler).await?;
+
+    Ok(result.output)
+}
+
+/// Run a fix task with streaming output to TUI.
+async fn run_fix_with_streaming(
+    engine: &Engine<'_>,
+    ctx: &TaskContext,
+    fix_type: &str,
+    feedback: String,
+    tx: &mpsc::Sender<RunMessage>,
+) -> bool {
+    let mut context = ctx.base_context();
+    if let Some(obj) = context.as_object_mut() {
+        obj.insert("fix_type".to_string(), json!(fix_type));
+        obj.insert("feedback".to_string(), json!(feedback));
+    }
+
+    let task = Task::new(TaskKind::Fix, context);
+    let mut handler = TuiEventHandler::new(tx.clone());
+
+    match engine.run_stream(task, &mut handler).await {
+        Ok(result) => result.success,
+        Err(e) => {
+            warn!("Fix failed: {}", e);
+            false
+        }
+    }
 }
 
 /// Prepare execution by validating state and computing context.
@@ -726,71 +887,6 @@ fn prepare_execution(
     }))
 }
 
-/// Run code review and verification loops.
-///
-/// Returns `Ok(())` if both passed, `Err(reason)` if either failed with changes needed.
-async fn run_review_and_verification(
-    engine: &Engine<'_>,
-    ctx: &TaskContext,
-    state: &mut FeatureState,
-    feature_dir: &Path,
-) -> Result<(), String> {
-    // === Code Review Loop ===
-    println!();
-    println!("All phases completed. Running code review...");
-
-    let review_result = run_check_fix_loop(
-        &CheckConfig::REVIEW,
-        || run_review(engine, ctx),
-        |feedback| run_fix(engine, ctx, "code review", feedback),
-    )
-    .await;
-
-    match review_result {
-        CheckResult::Passed => {
-            // Continue to verification
-        }
-        CheckResult::NeedsChanges(reason) => {
-            return Err(reason);
-        }
-        CheckResult::Error(e) => {
-            // Log the error but continue - check errors shouldn't block the pipeline
-            warn!("Code review check encountered an error: {}", e);
-            println!("Continuing despite code review error...");
-        }
-    }
-
-    // === Verification Loop ===
-    println!();
-    println!("Running verification...");
-
-    let verification_result = run_check_fix_loop(
-        &CheckConfig::VERIFICATION,
-        || run_verification(engine, ctx),
-        |feedback| run_fix(engine, ctx, "verification", feedback),
-    )
-    .await;
-
-    match verification_result {
-        CheckResult::Passed => {
-            // Continue to PR creation
-        }
-        CheckResult::NeedsChanges(reason) => {
-            return Err(reason);
-        }
-        CheckResult::Error(e) => {
-            // Log the error but continue - check errors shouldn't block the pipeline
-            warn!("Verification check encountered an error: {}", e);
-            println!("Continuing despite verification error...");
-        }
-    }
-
-    // Suppress unused warning - state and feature_dir are kept for potential future use
-    let _ = (state, feature_dir);
-
-    Ok(())
-}
-
 /// Save failed state to disk.
 fn save_failed_state(
     state: &mut FeatureState,
@@ -801,49 +897,6 @@ fn save_failed_state(
     state.error = Some(error.to_string());
     state.feature.updated_at = Utc::now();
     state.save(feature_dir)
-}
-
-/// Finalize execution by creating PR and printing summary.
-async fn finalize_execution(
-    engine: &Engine<'_>,
-    ctx: &TaskContext,
-    state: &mut FeatureState,
-    feature_dir: &Path,
-    dry_run: bool,
-) -> Result<(), CliError> {
-    // Create PR if not dry run
-    if dry_run {
-        println!();
-        println!("Dry run complete. Skipping PR creation.");
-    } else {
-        println!();
-        println!("Creating pull request...");
-
-        match create_pull_request(engine, ctx, state).await {
-            Ok(pr_url) => {
-                println!("PR created: {}", pr_url);
-                state.result.pr_url = Some(pr_url);
-                state.status = FeatureStatus::Completed;
-            }
-            Err(e) => {
-                warn!("Failed to create PR: {}", e);
-                println!("Warning: Failed to create PR: {}", e);
-                println!("You can create the PR manually.");
-            }
-        }
-    }
-
-    // Update final state
-    state.feature.updated_at = Utc::now();
-    if state.status != FeatureStatus::Completed {
-        state.status = FeatureStatus::Completed;
-    }
-    state.save(feature_dir)?;
-
-    // Print summary
-    print_execution_summary(state);
-
-    Ok(())
 }
 
 /// Print execution summary.
@@ -907,41 +960,6 @@ fn get_latest_commit_sha(ctx: &TaskContext) -> Result<Option<String>, CliError> 
     } else {
         Ok(None)
     }
-}
-
-/// Run code review.
-async fn run_review(engine: &Engine<'_>, ctx: &TaskContext) -> Result<String, CliError> {
-    let task = Task::new(TaskKind::Review, ctx.base_context());
-    let result = engine.run(task).await?;
-
-    Ok(result.output)
-}
-
-/// Run verification.
-async fn run_verification(engine: &Engine<'_>, ctx: &TaskContext) -> Result<String, CliError> {
-    let task = Task::new(TaskKind::Verification, ctx.base_context());
-    let result = engine.run(task).await?;
-
-    Ok(result.output)
-}
-
-/// Run fix task to address review or verification issues.
-async fn run_fix(
-    engine: &Engine<'_>,
-    ctx: &TaskContext,
-    fix_type: &str,
-    feedback: String,
-) -> Result<String, CliError> {
-    let mut context = ctx.base_context();
-    if let Some(obj) = context.as_object_mut() {
-        obj.insert("fix_type".to_string(), json!(fix_type));
-        obj.insert("feedback".to_string(), json!(feedback));
-    }
-
-    let task = Task::new(TaskKind::Fix, context);
-    let result = engine.run(task).await?;
-
-    Ok(result.output)
 }
 
 /// Create a pull request using LLM to generate description.

@@ -3,6 +3,12 @@
 //! This module provides a TUI that shows execution progress with streaming
 //! output that replaces (not accumulates) between phases. Unlike the chat-based
 //! planning TUI, this is optimized for showing execution progress.
+//!
+//! The TUI displays:
+//! - Phase execution progress with streaming output
+//! - Code review status with iteration tracking
+//! - Verification status with iteration tracking
+//! - PR creation status
 
 use std::io;
 
@@ -31,6 +37,139 @@ use super::progress::{PhaseDisplayStatus, PhaseInfo};
 /// Spinner frames for loading animation.
 const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+/// Type of check being performed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckType {
+    /// Code review check.
+    Review,
+    /// Verification check.
+    Verification,
+}
+
+impl CheckType {
+    /// Get the display name for this check type.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Review => "Code Review",
+            Self::Verification => "Verification",
+        }
+    }
+}
+
+/// Result of a single check iteration.
+#[derive(Debug, Clone)]
+pub enum CheckIterationResult {
+    /// Check passed successfully.
+    Passed,
+    /// Check found issues that need to be addressed.
+    NeedsChanges(String),
+    /// Check itself failed to run.
+    Error(String),
+}
+
+/// Final result of a check-fix loop.
+#[derive(Debug, Clone)]
+pub enum CheckFinalResult {
+    /// Check passed successfully.
+    Passed,
+    /// Check still needs changes after max iterations.
+    NeedsChanges(String),
+    /// Check encountered an error.
+    Error(String),
+    /// Check was skipped.
+    Skipped(String),
+}
+
+/// Current execution stage in the pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExecutionStage {
+    /// Executing phases.
+    #[default]
+    Phases,
+    /// Running code review.
+    Review,
+    /// Running verification.
+    Verification,
+    /// Creating pull request.
+    PrCreation,
+    /// Execution complete.
+    Done,
+}
+
+impl ExecutionStage {
+    /// Get the display name for this stage.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Phases => "Phases",
+            Self::Review => "Code Review",
+            Self::Verification => "Verification",
+            Self::PrCreation => "PR Creation",
+            Self::Done => "Done",
+        }
+    }
+}
+
+/// Status of a check (review or verification).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CheckStatus {
+    /// Check has not started yet.
+    #[default]
+    Pending,
+    /// Check is currently running.
+    Checking,
+    /// Fix is being applied.
+    Fixing,
+    /// Check passed successfully.
+    Passed,
+    /// Check found issues that still need changes.
+    NeedsChanges,
+    /// Check was skipped.
+    Skipped,
+    /// Check encountered an error.
+    Error,
+}
+
+impl CheckStatus {
+    /// Get the icon for this status.
+    #[must_use]
+    pub fn icon(&self) -> char {
+        match self {
+            Self::Pending => '○',
+            Self::Checking | Self::Fixing => '◐',
+            Self::Passed => '●',
+            Self::NeedsChanges => '◑',
+            Self::Skipped => '○',
+            Self::Error => '✗',
+        }
+    }
+
+    /// Get the color for this status.
+    #[must_use]
+    pub fn color(&self) -> Color {
+        match self {
+            Self::Pending => Color::DarkGray,
+            Self::Checking | Self::Fixing => Color::Yellow,
+            Self::Passed => Color::Green,
+            Self::NeedsChanges => Color::Magenta,
+            Self::Skipped => Color::DarkGray,
+            Self::Error => Color::Red,
+        }
+    }
+}
+
+/// State of a check (review or verification).
+#[derive(Debug, Clone, Default)]
+pub struct CheckState {
+    /// Current iteration (1-indexed).
+    pub current_iteration: u32,
+    /// Maximum number of iterations.
+    pub max_iterations: u32,
+    /// Current status of the check.
+    pub status: CheckStatus,
+}
+
 /// Messages sent to the TUI from the execution worker.
 #[derive(Debug)]
 pub enum RunMessage {
@@ -49,6 +188,45 @@ pub enum RunMessage {
     StatsUpdate { turns: u32, cost_usd: f64 },
     /// Activity message update.
     Activity(String),
+
+    /// Check started (review or verification).
+    CheckStarted {
+        check_type: CheckType,
+        max_iterations: u32,
+    },
+    /// Check iteration started.
+    CheckIterationStarted {
+        check_type: CheckType,
+        iteration: u32,
+        max_iterations: u32,
+    },
+    /// Check iteration result.
+    CheckIterationResult {
+        check_type: CheckType,
+        iteration: u32,
+        result: CheckIterationResult,
+    },
+    /// Fix started for a check.
+    FixStarted {
+        check_type: CheckType,
+        iteration: u32,
+    },
+    /// Fix completed for a check.
+    FixCompleted {
+        check_type: CheckType,
+        iteration: u32,
+        success: bool,
+    },
+    /// Check completed (review or verification).
+    CheckCompleted {
+        check_type: CheckType,
+        result: CheckFinalResult,
+    },
+    /// PR creation started.
+    PrCreationStarted,
+    /// PR creation completed.
+    PrCreationCompleted { pr_url: Option<String> },
+
     /// Execution complete.
     Complete,
     /// Error occurred.
@@ -85,6 +263,14 @@ pub struct RunApp {
     error: Option<String>,
     /// Whether execution is complete.
     complete: bool,
+    /// Current execution stage.
+    execution_stage: ExecutionStage,
+    /// Code review state.
+    review_state: CheckState,
+    /// Verification state.
+    verification_state: CheckState,
+    /// PR URL if created.
+    pr_url: Option<String>,
 }
 
 impl std::fmt::Debug for RunApp {
@@ -131,6 +317,10 @@ impl RunApp {
             visible_content_height: 0,
             error: None,
             complete: false,
+            execution_stage: ExecutionStage::Phases,
+            review_state: CheckState::default(),
+            verification_state: CheckState::default(),
+            pr_url: None,
         }
     }
 
@@ -252,8 +442,149 @@ impl RunApp {
             RunMessage::Activity(msg) => {
                 self.activity = msg;
             }
+
+            // Check-related messages
+            RunMessage::CheckStarted {
+                check_type,
+                max_iterations,
+            } => {
+                self.execution_stage = match check_type {
+                    CheckType::Review => ExecutionStage::Review,
+                    CheckType::Verification => ExecutionStage::Verification,
+                };
+                let state = self.get_check_state_mut(check_type);
+                state.max_iterations = max_iterations;
+                state.status = CheckStatus::Checking;
+                state.current_iteration = 0;
+
+                // Clear streaming content for new stage
+                self.streaming_content.clear();
+                self.scroll = 0;
+                self.activity = format!("Starting {}...", check_type.name());
+            }
+            RunMessage::CheckIterationStarted {
+                check_type,
+                iteration,
+                max_iterations,
+            } => {
+                let state = self.get_check_state_mut(check_type);
+                state.current_iteration = iteration;
+                state.max_iterations = max_iterations;
+                state.status = CheckStatus::Checking;
+
+                // Clear streaming content for new iteration
+                self.streaming_content.clear();
+                self.scroll = 0;
+                self.activity = format!(
+                    "{}: Checking ({}/{})",
+                    check_type.name(),
+                    iteration,
+                    max_iterations
+                );
+            }
+            RunMessage::CheckIterationResult {
+                check_type,
+                iteration,
+                result,
+            } => {
+                // Update state status first
+                let new_status = match &result {
+                    CheckIterationResult::Passed => CheckStatus::Passed,
+                    CheckIterationResult::NeedsChanges(_) => CheckStatus::NeedsChanges,
+                    CheckIterationResult::Error(_) => CheckStatus::Error,
+                };
+                self.get_check_state_mut(check_type).status = new_status;
+
+                // Then update activity
+                self.activity = match &result {
+                    CheckIterationResult::Passed => format!("{}: PASSED", check_type.name()),
+                    CheckIterationResult::NeedsChanges(_) => format!(
+                        "{}: Needs changes (iteration {})",
+                        check_type.name(),
+                        iteration
+                    ),
+                    CheckIterationResult::Error(e) => {
+                        format!("{}: Error - {}", check_type.name(), e)
+                    }
+                };
+            }
+            RunMessage::FixStarted {
+                check_type,
+                iteration,
+            } => {
+                // Get max_iterations and update status
+                let max_iterations = {
+                    let state = self.get_check_state_mut(check_type);
+                    state.status = CheckStatus::Fixing;
+                    state.max_iterations
+                };
+
+                // Clear streaming content for fix
+                self.streaming_content.clear();
+                self.scroll = 0;
+                self.activity = format!(
+                    "{}: Fixing issues ({}/{})",
+                    check_type.name(),
+                    iteration,
+                    max_iterations
+                );
+            }
+            RunMessage::FixCompleted {
+                check_type,
+                iteration: _,
+                success,
+            } => {
+                if success {
+                    self.get_check_state_mut(check_type).status = CheckStatus::Checking;
+                    self.activity = format!("{}: Fix applied, re-checking...", check_type.name());
+                } else {
+                    self.activity = format!("{}: Fix failed", check_type.name());
+                }
+            }
+            RunMessage::CheckCompleted { check_type, result } => {
+                // Update state status first
+                let new_status = match &result {
+                    CheckFinalResult::Passed => CheckStatus::Passed,
+                    CheckFinalResult::NeedsChanges(_) => CheckStatus::NeedsChanges,
+                    CheckFinalResult::Error(_) => CheckStatus::Error,
+                    CheckFinalResult::Skipped(_) => CheckStatus::Skipped,
+                };
+                self.get_check_state_mut(check_type).status = new_status;
+
+                // Then update activity
+                self.activity = match &result {
+                    CheckFinalResult::Passed => format!("{}: PASSED", check_type.name()),
+                    CheckFinalResult::NeedsChanges(_) => {
+                        format!("{}: Still needs changes", check_type.name())
+                    }
+                    CheckFinalResult::Error(_) => {
+                        format!("{}: Error (continuing)", check_type.name())
+                    }
+                    CheckFinalResult::Skipped(reason) => {
+                        format!("{}: Skipped - {}", check_type.name(), reason)
+                    }
+                };
+            }
+
+            // PR creation messages
+            RunMessage::PrCreationStarted => {
+                self.execution_stage = ExecutionStage::PrCreation;
+                self.streaming_content.clear();
+                self.scroll = 0;
+                self.activity = "Creating pull request...".to_string();
+            }
+            RunMessage::PrCreationCompleted { pr_url } => {
+                self.pr_url = pr_url.clone();
+                if let Some(ref url) = pr_url {
+                    self.activity = format!("PR created: {}", url);
+                } else {
+                    self.activity = "PR creation completed".to_string();
+                }
+            }
+
             RunMessage::Complete => {
                 self.complete = true;
+                self.execution_stage = ExecutionStage::Done;
                 self.activity = "Execution complete!".to_string();
                 // Keep running so user can see final state
                 // They can press q or Ctrl+C to exit
@@ -261,6 +592,14 @@ impl RunApp {
             RunMessage::Error(error) => {
                 self.error = Some(error);
             }
+        }
+    }
+
+    /// Get mutable reference to the check state for the given type.
+    fn get_check_state_mut(&mut self, check_type: CheckType) -> &mut CheckState {
+        match check_type {
+            CheckType::Review => &mut self.review_state,
+            CheckType::Verification => &mut self.verification_state,
         }
     }
 
@@ -305,16 +644,16 @@ impl RunApp {
 
         self.render_title(frame, main_chunks[0]);
 
-        // Split main area: phases sidebar + streaming content
+        // Split main area: sidebar + streaming content
         let content_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(35), // Phases sidebar
+                Constraint::Length(35), // Sidebar (phases + checks)
                 Constraint::Min(40),    // Streaming content
             ])
             .split(main_chunks[1]);
 
-        self.render_phases(frame, content_chunks[0]);
+        self.render_sidebar(frame, content_chunks[0]);
         self.render_content(frame, content_chunks[1]);
         self.render_footer(frame, main_chunks[2]);
     }
@@ -329,7 +668,7 @@ impl RunApp {
         } else if self.error.is_some() {
             "✗ Failed".to_string()
         } else {
-            format!("{} Running", spinner)
+            format!("{} {}", spinner, self.execution_stage.name())
         };
 
         let title = format!(" GBA Run: {} [{}] ", self.feature_slug, status);
@@ -360,7 +699,22 @@ impl RunApp {
         frame.render_widget(gauge, area);
     }
 
-    /// Render the phases sidebar.
+    /// Render the sidebar with phases and checks.
+    fn render_sidebar(&self, frame: &mut Frame, area: Rect) {
+        // Split sidebar into phases (top) and checks (bottom)
+        let sidebar_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(5),    // Phases (flexible)
+                Constraint::Length(6), // Checks (fixed height for 3 items + border)
+            ])
+            .split(area);
+
+        self.render_phases(frame, sidebar_chunks[0]);
+        self.render_checks(frame, sidebar_chunks[1]);
+    }
+
+    /// Render the phases section of the sidebar.
     fn render_phases(&self, frame: &mut Frame, area: Rect) {
         let items: Vec<ListItem> = self
             .phases
@@ -407,6 +761,110 @@ impl RunApp {
         );
 
         frame.render_widget(list, area);
+    }
+
+    /// Render the checks section of the sidebar.
+    fn render_checks(&self, frame: &mut Frame, area: Rect) {
+        let spinner = SPINNER_FRAMES[self.spinner_frame];
+
+        let items: Vec<ListItem> = vec![
+            self.render_check_item(CheckType::Review, &self.review_state, spinner),
+            self.render_check_item(CheckType::Verification, &self.verification_state, spinner),
+            self.render_pr_item(spinner),
+        ];
+
+        let list = List::new(items).block(
+            Block::default()
+                .title(" Checks ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::White)),
+        );
+
+        frame.render_widget(list, area);
+    }
+
+    /// Render a single check item (review or verification).
+    fn render_check_item(
+        &self,
+        check_type: CheckType,
+        state: &CheckState,
+        spinner: char,
+    ) -> ListItem<'static> {
+        let is_active = matches!(
+            (&self.execution_stage, check_type),
+            (ExecutionStage::Review, CheckType::Review)
+                | (ExecutionStage::Verification, CheckType::Verification)
+        );
+
+        let icon =
+            if is_active && matches!(state.status, CheckStatus::Checking | CheckStatus::Fixing) {
+                spinner
+            } else {
+                state.status.icon()
+            };
+
+        let mut spans = vec![
+            Span::styled(
+                format!("{} ", icon),
+                Style::default().fg(state.status.color()),
+            ),
+            Span::styled(
+                check_type.name().to_string(),
+                if is_active {
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::Yellow)
+                } else {
+                    Style::default()
+                },
+            ),
+        ];
+
+        // Add iteration info if in progress
+        if state.current_iteration > 0 && state.max_iterations > 0 {
+            let suffix = match state.status {
+                CheckStatus::Fixing => " (fixing)",
+                _ => "",
+            };
+            spans.push(Span::styled(
+                format!(
+                    " [{}/{}]{}",
+                    state.current_iteration, state.max_iterations, suffix
+                ),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        ListItem::new(Line::from(spans))
+    }
+
+    /// Render the PR creation item.
+    fn render_pr_item(&self, spinner: char) -> ListItem<'static> {
+        let is_active = self.execution_stage == ExecutionStage::PrCreation;
+
+        let (icon, color) = if self.pr_url.is_some() {
+            ('●', Color::Green)
+        } else if is_active {
+            (spinner, Color::Yellow)
+        } else {
+            ('○', Color::DarkGray)
+        };
+
+        let spans = vec![
+            Span::styled(format!("{} ", icon), Style::default().fg(color)),
+            Span::styled(
+                "PR Creation".to_string(),
+                if is_active {
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::Yellow)
+                } else {
+                    Style::default()
+                },
+            ),
+        ];
+
+        ListItem::new(Line::from(spans))
     }
 
     /// Render the streaming content area.
@@ -492,18 +950,69 @@ impl RunApp {
     }
 
     /// Calculate progress percentage.
+    ///
+    /// Progress is divided into 4 stages:
+    /// - Phases: 0-60% (proportional to completed phases)
+    /// - Review: 60-75%
+    /// - Verification: 75-90%
+    /// - PR Creation: 90-100%
     fn progress_percent(&self) -> u16 {
-        if self.phases.is_empty() {
-            return 0;
-        }
+        // Phase progress (0-60%)
+        let phase_progress = if self.phases.is_empty() {
+            60
+        } else {
+            let completed = self
+                .phases
+                .iter()
+                .filter(|p| p.status == PhaseDisplayStatus::Completed)
+                .count();
+            (completed * 60) / self.phases.len()
+        };
 
-        let completed = self
+        // Check if all phases are complete
+        let all_phases_complete = self
             .phases
             .iter()
-            .filter(|p| p.status == PhaseDisplayStatus::Completed)
-            .count();
+            .all(|p| p.status == PhaseDisplayStatus::Completed);
 
-        ((completed * 100) / self.phases.len()) as u16
+        if !all_phases_complete {
+            return phase_progress as u16;
+        }
+
+        // Review progress (60-75%)
+        let review_progress = match self.review_state.status {
+            CheckStatus::Pending => 0,
+            CheckStatus::Checking | CheckStatus::Fixing => 7,
+            CheckStatus::Passed
+            | CheckStatus::Skipped
+            | CheckStatus::Error
+            | CheckStatus::NeedsChanges => 15,
+        };
+
+        // Verification progress (75-90%)
+        let verification_progress = match self.verification_state.status {
+            CheckStatus::Pending => 0,
+            CheckStatus::Checking | CheckStatus::Fixing => 7,
+            CheckStatus::Passed
+            | CheckStatus::Skipped
+            | CheckStatus::Error
+            | CheckStatus::NeedsChanges => 15,
+        };
+
+        // PR progress (90-100%)
+        let pr_progress = match self.execution_stage {
+            ExecutionStage::PrCreation => 5,
+            ExecutionStage::Done => 10,
+            _ => {
+                if self.pr_url.is_some() {
+                    10
+                } else {
+                    0
+                }
+            }
+        };
+
+        (phase_progress + review_progress + verification_progress + pr_progress) as u16
     }
 
     /// Scroll up.
@@ -632,7 +1141,9 @@ mod tests {
         state.phases.clear();
         let app = RunApp::new(&state);
 
-        assert_eq!(app.progress_percent(), 0);
+        // Empty phases = 60% (phases portion is considered complete)
+        // Review/Verification/PR stages still pending
+        assert_eq!(app.progress_percent(), 60);
     }
 
     #[test]
@@ -641,7 +1152,8 @@ mod tests {
         state.phases[0].status = PhaseStatus::Completed;
         let app = RunApp::new(&state);
 
-        assert_eq!(app.progress_percent(), 50); // 1/2 = 50%
+        // 1/2 phases = 30% (phases account for 60% of total progress)
+        assert_eq!(app.progress_percent(), 30);
     }
 
     #[test]
