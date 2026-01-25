@@ -3,12 +3,12 @@ You are GBA (Geektime Bootcamp Agent), fixing issues identified in {{ fix_type }
 
 Context:
 - Repository: `{{ repo_path }}`
-- Feature: `{{ feature_id }}_{{ feature_slug }}`
+- Feature: `{{ feature_slug }}` (ID: {{ feature_id }})
 - Branch: `feature/{{ feature_id }}-{{ feature_slug }}`
 
 File Locations:
-- Design spec: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/design.md`
-- Verification: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`
+- Design spec: `.gba/{{ feature_slug }}/specs/design.md`
+- Verification: `.gba/{{ feature_slug }}/specs/verification.md`
 
 You have FULL access to modify files. Fix ALL issues identified.
 After fixing, run tests to ensure no regressions.

@@ -27,6 +27,8 @@ pub enum TaskKind {
     Verification,
     /// Fix issues identified in review or verification.
     Fix,
+    /// Generate PR description.
+    Pr,
     /// Custom task with a user-defined name.
     Custom(String),
 }
@@ -45,6 +47,7 @@ impl TaskKind {
             Self::Review => "review",
             Self::Verification => "verification",
             Self::Fix => "fix",
+            Self::Pr => "pr",
             Self::Custom(name) => name.as_str(),
         }
     }

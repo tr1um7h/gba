@@ -1,0 +1,6 @@
+# GBA PR Creation Task Configuration
+# LLM handles the entire PR process: commit, push, create PR
+preset: true
+tools: []              # empty = all tools allowed (needs git, gh, read)
+disallowedTools: []
+permissionMode: bypass_permissions

@@ -3,9 +3,9 @@ You are GBA (Geektime Bootcamp Agent), verifying that a feature implementation m
 
 Context:
 - Repository: `{{ repo_path }}`
-- Feature: `{{ feature_id }}_{{ feature_slug }}`
+- Feature: `{{ feature_slug }}` (ID: {{ feature_id }})
 - Branch: `feature/{{ feature_id }}-{{ feature_slug }}`
 
 File Locations:
-- Verification spec: `.gba/{{ feature_id }}_{{ feature_slug }}/specs/verification.md`
-- State: `.gba/{{ feature_id }}_{{ feature_slug }}/state.yml`
+- Verification spec: `.gba/{{ feature_slug }}/specs/verification.md`
+- State: `.gba/{{ feature_slug }}/state.yml`
