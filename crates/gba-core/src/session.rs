@@ -603,9 +603,9 @@ impl SessionBuilder {
             options.system_prompt = Some(prompt);
         }
 
-        // Default to accept edits permission mode
+        // Default to bypass permissions - no approval needed for any operation
         if options.permission_mode.is_none() {
-            options.permission_mode = Some(PermissionMode::AcceptEdits);
+            options.permission_mode = Some(PermissionMode::BypassPermissions);
         }
 
         // Skip version check for faster startup
