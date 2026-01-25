@@ -56,16 +56,16 @@
 use std::path::PathBuf;
 
 use claude_agent_sdk_rs::{
-    ClaudeAgentOptions, ClaudeClient, ContentBlock, Message, PermissionMode, ResultMessage,
-    SystemPrompt, ToolResultContent,
+    ClaudeAgentOptions, ClaudeClient, Message, PermissionMode, SystemPrompt,
 };
 use futures::StreamExt;
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
 use crate::config::{TaskConfig, merge_base_options};
 use crate::error::{EngineError, Result};
 use crate::event::EventHandler;
+use crate::message::MessageProcessor;
 use crate::task::TaskStats;
 
 /// A message in a conversation.
@@ -227,10 +227,7 @@ impl Session {
         }
 
         // Process collected messages
-        let mut response_text = String::new();
-        for msg in &messages {
-            self.process_message_no_handler(msg, &mut response_text);
-        }
+        let response_text = self.process_messages_no_handler(&messages);
 
         // Store assistant response
         self.history
@@ -306,10 +303,7 @@ impl Session {
         }
 
         // Process collected messages with handler
-        let mut response_text = String::new();
-        for msg in &messages {
-            self.process_message_with_handler(msg, &mut response_text, handler);
-        }
+        let response_text = self.process_messages_with_handler(&messages, handler);
 
         handler.on_complete();
 
@@ -408,92 +402,61 @@ impl Session {
         Ok(())
     }
 
-    /// Process a message from the stream without a handler.
-    fn process_message_no_handler(&mut self, msg: &Message, response_text: &mut String) {
-        match msg {
-            Message::Assistant(assistant_msg) => {
-                for block in &assistant_msg.message.content {
-                    if let ContentBlock::Text(text) = block {
-                        response_text.push_str(&text.text);
-                    }
-                }
-            }
-            Message::Result(result_msg) => {
-                self.update_stats_from_result(result_msg);
-            }
-            Message::User(_)
-            | Message::System(_)
-            | Message::StreamEvent(_)
-            | Message::ControlCancelRequest(_) => {
-                // Ignore these message types
-            }
+    /// Process messages without a handler.
+    ///
+    /// # Arguments
+    ///
+    /// * `messages` - The messages to process
+    ///
+    /// # Returns
+    ///
+    /// The accumulated response text
+    fn process_messages_no_handler(&mut self, messages: &[Message]) -> String {
+        let mut processor = MessageProcessor::new().with_accumulate_stats(true);
+
+        for msg in messages {
+            processor.process(msg);
         }
+
+        // Merge processor stats into session stats
+        let proc_stats = processor.stats();
+        self.stats.turns += proc_stats.turns;
+        self.stats.cost_usd += proc_stats.cost_usd;
+        self.stats.input_tokens += proc_stats.input_tokens;
+        self.stats.output_tokens += proc_stats.output_tokens;
+
+        processor.take_output()
     }
 
-    /// Process a message from the stream with an event handler.
-    fn process_message_with_handler(
+    /// Process messages with an event handler.
+    ///
+    /// # Arguments
+    ///
+    /// * `messages` - The messages to process
+    /// * `handler` - Event handler for streaming events
+    ///
+    /// # Returns
+    ///
+    /// The accumulated response text
+    fn process_messages_with_handler(
         &mut self,
-        msg: &Message,
-        response_text: &mut String,
-        handler: &mut impl EventHandler,
-    ) {
-        match msg {
-            Message::Assistant(assistant_msg) => {
-                for block in &assistant_msg.message.content {
-                    match block {
-                        ContentBlock::Text(text) => {
-                            response_text.push_str(&text.text);
-                            handler.on_text(&text.text);
-                        }
-                        ContentBlock::ToolUse(tool_use) => {
-                            handler.on_tool_use(&tool_use.name, &tool_use.input);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Message::User(user_msg) => {
-                // Handle tool results from user messages
-                if let Some(ref content) = user_msg.content {
-                    for block in content {
-                        if let ContentBlock::ToolResult(tool_result) = block {
-                            let result_str = match &tool_result.content {
-                                Some(ToolResultContent::Text(s)) => s.as_str(),
-                                Some(ToolResultContent::Blocks(_)) => "[structured content]",
-                                None => "",
-                            };
-                            handler.on_tool_result(result_str);
-                        }
-                    }
-                }
-            }
-            Message::Result(result_msg) => {
-                self.update_stats_from_result(result_msg);
+        messages: &[Message],
+        handler: &mut dyn EventHandler,
+    ) -> String {
+        let mut processor = MessageProcessor::new().with_accumulate_stats(true);
 
-                if result_msg.is_error {
-                    handler.on_error("Claude reported an error");
-                }
-            }
-            Message::System(_) | Message::StreamEvent(_) | Message::ControlCancelRequest(_) => {
-                // Ignore these message types
-            }
-        }
-    }
-
-    /// Update session stats from a result message.
-    fn update_stats_from_result(&mut self, result_msg: &ResultMessage) {
-        self.stats.turns += result_msg.num_turns;
-        self.stats.cost_usd += result_msg.total_cost_usd.unwrap_or(0.0);
-
-        if let Some(usage) = &result_msg.usage {
-            self.stats.update_from_usage(usage, true);
+        for msg in messages {
+            processor.process_with_handler(msg, handler);
         }
 
-        trace!(
-            turns = result_msg.num_turns,
-            cost = result_msg.total_cost_usd,
-            "result message processed"
-        );
+        // Merge processor stats into session stats
+        let proc_stats = processor.stats();
+        self.stats.turns += proc_stats.turns;
+        self.stats.cost_usd += proc_stats.cost_usd;
+        self.stats.input_tokens += proc_stats.input_tokens;
+        self.stats.output_tokens += proc_stats.output_tokens;
+
+        processor.take_output()
     }
 }
 

@@ -53,19 +53,20 @@ use std::fs;
 use std::path::PathBuf;
 
 use claude_agent_sdk_rs::{
-    ClaudeAgentOptions, ClaudeClient, ContentBlock, Message, PermissionMode, SystemPrompt,
-    SystemPromptPreset, ToolResultContent, Tools, query,
+    ClaudeAgentOptions, ClaudeClient, Message, PermissionMode, SystemPrompt, SystemPromptPreset,
+    Tools, query,
 };
 use futures::StreamExt;
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument};
 
 use gba_pm::PromptManager;
 
 use crate::config::{EngineConfig, TaskConfig, merge_base_options};
 use crate::error::{EngineError, Result};
 use crate::event::EventHandler;
+use crate::message::MessageProcessor;
 use crate::session::{Session, SessionBuilder};
-use crate::task::{Task, TaskKind, TaskResult, TaskStats};
+use crate::task::{Task, TaskKind, TaskResult};
 
 /// Core execution engine for GBA.
 ///
@@ -261,38 +262,39 @@ impl<'a> Engine<'a> {
         info!("sending query to Claude");
         client.query(&user_prompt).await?;
 
-        // Process streaming response
-        let mut output = String::new();
-        let mut stats = TaskStats::default();
-        let mut success = true;
-
-        let mut stream = client.receive_response();
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(msg) => {
-                    self.process_streaming_message(
-                        &msg,
-                        &mut output,
-                        &mut stats,
-                        &mut success,
-                        handler,
-                    )?;
-                }
-                Err(e) => {
-                    let error_msg = e.to_string();
-                    handler.on_error(&error_msg);
-                    drop(stream);
-                    client.disconnect().await?;
-                    return Err(e.into());
+        // Collect messages first, then process them
+        let mut messages = Vec::new();
+        {
+            let mut stream = client.receive_response();
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(msg) => messages.push(msg),
+                    Err(e) => {
+                        handler.on_error(&e.to_string());
+                        // Stream is dropped here at end of scope
+                        drop(stream);
+                        client.disconnect().await?;
+                        return Err(e.into());
+                    }
                 }
             }
         }
-        drop(stream);
+
+        // Process all messages using MessageProcessor
+        let mut processor = MessageProcessor::new();
+        for msg in &messages {
+            processor.process_with_handler(msg, handler);
+        }
 
         handler.on_complete();
 
         // Disconnect client
         client.disconnect().await?;
+
+        // Get stats before taking output (which moves processor)
+        let stats = processor.stats().clone();
+        let success = processor.success();
+        let output = processor.take_output();
 
         let result = TaskResult {
             success,
@@ -531,110 +533,23 @@ impl<'a> Engine<'a> {
 
     /// Process messages from Claude agent response.
     fn process_messages(&self, messages: Vec<Message>) -> Result<TaskResult> {
-        let mut output = String::new();
-        let mut stats = TaskStats::default();
-        let mut success = true;
+        let mut processor = MessageProcessor::new();
 
-        for message in messages {
-            match message {
-                Message::Assistant(msg) => {
-                    for block in &msg.message.content {
-                        if let ContentBlock::Text(text) = block {
-                            if !output.is_empty() {
-                                output.push('\n');
-                            }
-                            output.push_str(&text.text);
-                        }
-                    }
-                }
-                Message::Result(result) => {
-                    stats.turns = result.num_turns;
-                    stats.cost_usd = result.total_cost_usd.unwrap_or(0.0);
-
-                    // Extract token usage if available
-                    if let Some(ref usage) = result.usage {
-                        stats.update_from_usage(usage, false);
-                    }
-
-                    success = !result.is_error;
-                }
-                _ => {}
-            }
+        for message in &messages {
+            processor.process(message);
         }
+
+        // Get stats before taking output (which moves processor)
+        let stats = processor.stats().clone();
+        let success = processor.success();
+        let output = processor.take_output();
 
         Ok(TaskResult {
             success,
             output,
-            artifacts: Vec::new(), // TODO: Extract artifacts from tool use
+            artifacts: Vec::new(),
             stats,
         })
-    }
-
-    /// Process a single streaming message.
-    fn process_streaming_message(
-        &self,
-        msg: &Message,
-        output: &mut String,
-        stats: &mut TaskStats,
-        success: &mut bool,
-        handler: &mut impl EventHandler,
-    ) -> Result<()> {
-        match msg {
-            Message::Assistant(assistant_msg) => {
-                for block in &assistant_msg.message.content {
-                    match block {
-                        ContentBlock::Text(text) => {
-                            output.push_str(&text.text);
-                            handler.on_text(&text.text);
-                        }
-                        ContentBlock::ToolUse(tool_use) => {
-                            handler.on_tool_use(&tool_use.name, &tool_use.input);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Message::User(user_msg) => {
-                // Handle tool results from user messages
-                if let Some(ref content) = user_msg.content {
-                    for block in content {
-                        if let ContentBlock::ToolResult(tool_result) = block {
-                            let result_str = match &tool_result.content {
-                                Some(ToolResultContent::Text(s)) => s.as_str(),
-                                Some(ToolResultContent::Blocks(_)) => "[structured content]",
-                                None => "",
-                            };
-                            handler.on_tool_result(result_str);
-                        }
-                    }
-                }
-            }
-            Message::Result(result_msg) => {
-                stats.turns = result_msg.num_turns;
-                stats.cost_usd = result_msg.total_cost_usd.unwrap_or(0.0);
-
-                if let Some(ref usage) = result_msg.usage {
-                    stats.update_from_usage(usage, false);
-                }
-
-                *success = !result_msg.is_error;
-
-                if result_msg.is_error {
-                    handler.on_error("Claude reported an error");
-                }
-
-                trace!(
-                    turns = result_msg.num_turns,
-                    cost = result_msg.total_cost_usd,
-                    "result message processed"
-                );
-            }
-            Message::System(_) | Message::StreamEvent(_) | Message::ControlCancelRequest(_) => {
-                // Ignore these message types
-            }
-        }
-
-        Ok(())
     }
 }
 
