@@ -2,8 +2,8 @@ feature:
   id: '0002'
   slug: improve-code-quality
   createdAt: 2026-01-25T23:02:13.515465Z
-  updatedAt: 2026-01-25T23:29:39.472727Z
-status: inProgress
+  updatedAt: 2026-01-25T23:34:33.356598Z
+status: completed
 currentPhase: 3
 git:
   worktreePath: .trees/improve-code-quality
@@ -56,6 +56,8 @@ totalStats:
   outputTokens: 99628
   costUsd: 13.809862
 result:
+  prUrl: https://github.com/tyrchen/gba/pull/7
+  prNumber: 7
   merged: false
   review:
     status: passed
