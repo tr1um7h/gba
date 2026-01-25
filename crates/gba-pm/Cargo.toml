@@ -1,0 +1,19 @@
+[package]
+name = "gba-pm"
+description = "Prompt manager for GBA (Geektime Bootcamp Agent)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+minijinja = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
