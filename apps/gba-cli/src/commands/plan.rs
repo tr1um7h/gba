@@ -8,9 +8,6 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 
-use gba_core::{Engine, EngineConfig};
-use gba_pm::PromptManager;
-
 use crate::error::CliError;
 use crate::state::FeatureState;
 use crate::tui::App;
@@ -48,7 +45,7 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     }
 
     // Check if feature already exists
-    if utils::find_feature_dir(workdir, slug).is_ok() {
+    if utils::feature_exists(workdir, slug) {
         return Err(CliError::FeatureExists(slug.to_string()).into());
     }
 
@@ -57,7 +54,7 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     info!(feature_id = %feature_id, "generated feature ID");
 
     // Create the engine
-    let engine = create_engine(workdir)?;
+    let engine = utils::create_engine(workdir)?;
 
     // Launch TUI
     let mut app = App::new(slug.to_string(), feature_id.clone(), workdir);
@@ -93,35 +90,6 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     Ok(())
 }
 
-/// Create the GBA engine with prompts loaded.
-fn create_engine(workdir: &Path) -> Result<Engine<'static>> {
-    let tasks_dir = workdir.join("tasks");
-
-    if !tasks_dir.exists() {
-        return Err(CliError::Config(format!(
-            "tasks directory not found: {}",
-            tasks_dir.display()
-        ))
-        .into());
-    }
-
-    // Load prompts
-    let mut prompts = PromptManager::new();
-    prompts
-        .load_dir(&tasks_dir)
-        .context("failed to load task templates")?;
-
-    // Create engine config
-    let config = EngineConfig::builder()
-        .workdir(workdir)
-        .prompts(prompts)
-        .build();
-
-    let engine = Engine::new(config).context("failed to create engine")?;
-
-    Ok(engine)
-}
-
 /// Verify feature artifacts exist after planning completes.
 ///
 /// The worktree, specs, and state.yml are created by Claude during planning.
@@ -130,7 +98,7 @@ fn verify_feature_artifacts(workdir: &Path, state: &FeatureState) -> Result<()> 
     let slug = &state.feature.slug;
 
     // Verify worktree exists
-    let worktree_path = utils::trees_dir(workdir).join(slug);
+    let worktree_path = utils::feature_worktree_path(workdir, slug);
     if !worktree_path.exists() {
         warn!(
             worktree = %worktree_path.display(),
@@ -140,8 +108,8 @@ fn verify_feature_artifacts(workdir: &Path, state: &FeatureState) -> Result<()> 
         info!(worktree = %worktree_path.display(), "worktree verified");
     }
 
-    // Verify state.yml exists at .gba/{slug}/state.yml
-    let state_file = worktree_path.join(".gba").join(slug).join("state.yml");
+    // Verify state.yml exists
+    let state_file = utils::feature_state_file(workdir, slug);
     if !state_file.exists() {
         warn!(
             state_file = %state_file.display(),
@@ -154,15 +122,17 @@ fn verify_feature_artifacts(workdir: &Path, state: &FeatureState) -> Result<()> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    use crate::utils;
 
     fn setup_gba_project() -> TempDir {
         let temp_dir = TempDir::new().unwrap();
 
-        // Create .gba directory
+        // Create .gba directory with config
         fs::create_dir_all(temp_dir.path().join(".gba")).unwrap();
+        fs::write(temp_dir.path().join(".gba").join("config.yml"), "").unwrap();
 
         // Create tasks directory with plan task
         let plan_dir = temp_dir.path().join("tasks").join("plan");
@@ -188,7 +158,7 @@ mod tests {
     #[test]
     fn test_should_create_engine() {
         let temp_dir = setup_gba_project();
-        let result = create_engine(temp_dir.path());
+        let result = utils::create_engine(temp_dir.path());
         assert!(result.is_ok());
     }
 
@@ -198,7 +168,7 @@ mod tests {
         fs::create_dir_all(temp_dir.path().join(".gba")).unwrap();
         // No tasks directory
 
-        let result = create_engine(temp_dir.path());
+        let result = utils::create_engine(temp_dir.path());
         assert!(result.is_err());
     }
 }

@@ -17,7 +17,6 @@ mod cli;
 mod commands;
 mod config;
 mod error;
-mod git;
 mod state;
 pub mod tui;
 pub mod utils;

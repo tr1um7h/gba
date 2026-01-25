@@ -8,14 +8,13 @@ use std::path::Path;
 
 use chrono::Utc;
 use gba_core::event::PrintEventHandler;
-use gba_core::{Engine, EngineConfig, Task, TaskKind};
-use gba_pm::PromptManager;
+use gba_core::{Engine, Task, TaskKind};
 use serde_json::json;
 use tracing::{debug, info, warn};
 
 use crate::error::CliError;
 use crate::state::{FeatureState, FeatureStatus, PhaseStatus};
-use crate::utils::{find_feature_dir, is_initialized, trees_dir};
+use crate::utils;
 
 /// Run options for the execution pipeline.
 #[derive(Debug)]
@@ -49,12 +48,12 @@ pub struct RunOptions {
 /// - Git operations fail
 pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<(), CliError> {
     // Check initialization
-    if !is_initialized(workdir) {
+    if !utils::is_initialized(workdir) {
         return Err(CliError::NotInitialized);
     }
 
     // Find and load feature state
-    let feature_dir = find_feature_dir(workdir, slug)?;
+    let feature_dir = utils::find_feature_dir(workdir, slug)?;
     let mut state = FeatureState::load(&feature_dir)?;
 
     info!(
@@ -120,7 +119,7 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     }
 
     // Verify worktree exists
-    let worktree_path = trees_dir(workdir).join(&state.feature.slug);
+    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
     if !worktree_path.exists() {
         return Err(CliError::InvalidState(format!(
             "worktree not found: {}",
@@ -134,7 +133,7 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     state.save(&feature_dir)?;
 
     // Create engine with worktree as working directory
-    let engine = create_engine(workdir, &worktree_path)?;
+    let engine = utils::create_engine_with_context(workdir, &worktree_path)?;
 
     // Execute phases
     let result = execute_phases(
@@ -303,38 +302,6 @@ fn detect_resume_point(state: &FeatureState) -> usize {
     state.phases.len().saturating_sub(1)
 }
 
-/// Create the GBA engine with worktree as working directory.
-///
-/// The `PromptManager` only contains owned data (templates loaded from files),
-/// so it can safely be `'static`. No unsafe code is needed.
-///
-/// # Arguments
-///
-/// * `workdir` - Main repository working directory (for loading tasks)
-/// * `worktree_path` - Worktree path to use as the engine's working directory
-fn create_engine(workdir: &Path, worktree_path: &Path) -> Result<Engine<'static>, CliError> {
-    let tasks_dir = workdir.join("tasks");
-
-    if !tasks_dir.exists() {
-        return Err(CliError::Config(format!(
-            "tasks directory not found: {}",
-            tasks_dir.display()
-        )));
-    }
-
-    let mut prompts = PromptManager::new();
-    prompts.load_dir(&tasks_dir)?;
-
-    // Use worktree as working directory for the engine
-    let config = EngineConfig::builder()
-        .workdir(worktree_path)
-        .prompts(prompts)
-        .build();
-
-    let engine = Engine::new(config)?;
-    Ok(engine)
-}
-
 /// Execute the remaining phases.
 async fn execute_phases(
     engine: &Engine<'_>,
@@ -367,7 +334,7 @@ async fn execute_phases(
 
         // Build context for the execute task
         // Note: worktree_path is derived from workdir + slug
-        let worktree_path = trees_dir(workdir).join(&state.feature.slug);
+        let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
         let phases_context: Vec<serde_json::Value> = state
             .phases
             .iter()
@@ -440,7 +407,7 @@ async fn execute_phases(
 
 /// Get the latest commit SHA from the worktree.
 fn get_latest_commit_sha(workdir: &Path, state: &FeatureState) -> Result<Option<String>, CliError> {
-    let worktree_path = trees_dir(workdir).join(&state.feature.slug);
+    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
 
     let output = std::process::Command::new("git")
         .current_dir(&worktree_path)
@@ -484,7 +451,7 @@ async fn run_verification(engine: &Engine<'_>, state: &FeatureState) -> Result<S
 
 /// Create a pull request using gh CLI.
 async fn create_pull_request(workdir: &Path, state: &mut FeatureState) -> Result<String, CliError> {
-    let worktree_path = trees_dir(workdir).join(&state.feature.slug);
+    let worktree_path = utils::feature_worktree_path(workdir, &state.feature.slug);
 
     let branch = &state.git.branch;
     let base_branch = &state.git.base_branch;

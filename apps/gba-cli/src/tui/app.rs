@@ -31,6 +31,7 @@ use gba_core::{Engine, Session, TaskKind};
 
 use crate::error::CliError;
 use crate::state::FeatureState;
+use crate::utils;
 
 use super::chat::ChatWidget;
 use super::input::{InputAction, InputHandler};
@@ -413,13 +414,7 @@ impl App {
     ///
     /// Returns None if the file doesn't exist (e.g., user typed /done before completion).
     fn load_feature_state(&self) -> Option<FeatureState> {
-        // Path: .trees/{id}_{slug}/.gba/{slug}/
-        let state_dir = self
-            .workdir
-            .join(".trees")
-            .join(self.feature_slug.clone())
-            .join(".gba")
-            .join(&self.feature_slug);
+        let state_dir = utils::feature_gba_dir(&self.workdir, &self.feature_slug);
 
         match FeatureState::load(&state_dir) {
             Ok(state) => Some(state),
@@ -500,14 +495,7 @@ impl App {
     /// the plan is complete.
     fn check_phase_transition(&mut self) {
         // Check if state.yml exists in worktree - this is the definitive completion signal
-        // Path: .trees/{id}_{slug}/.gba/{slug}/state.yml
-        let state_file = self
-            .workdir
-            .join(".trees")
-            .join(self.feature_slug.clone())
-            .join(".gba")
-            .join(&self.feature_slug)
-            .join("state.yml");
+        let state_file = utils::feature_state_file(&self.workdir, &self.feature_slug);
 
         if state_file.exists() {
             self.phase = PlanPhase::Done;

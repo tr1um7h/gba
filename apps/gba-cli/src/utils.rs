@@ -1,10 +1,13 @@
 //! Utility functions for GBA CLI.
 //!
 //! This module provides common helper functions for CLI operations
-//! including directory lookup, formatting, and path manipulation.
+//! including directory lookup, formatting, path manipulation, and engine creation.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use gba_core::{Engine, EngineConfig};
+use gba_pm::PromptManager;
 
 use crate::error::CliError;
 use crate::state::FeatureState;
@@ -25,6 +28,46 @@ pub fn gba_dir(workdir: &Path) -> PathBuf {
 #[must_use]
 pub fn trees_dir(workdir: &Path) -> PathBuf {
     workdir.join(TREES_DIR)
+}
+
+/// Get the worktree path for a feature.
+///
+/// Returns `.trees/{slug}/`
+#[must_use]
+pub fn feature_worktree_path(workdir: &Path, slug: &str) -> PathBuf {
+    trees_dir(workdir).join(slug)
+}
+
+/// Get the feature's GBA directory path (where state and specs are stored).
+///
+/// Returns `.trees/{slug}/.gba/{slug}/`
+#[must_use]
+pub fn feature_gba_dir(workdir: &Path, slug: &str) -> PathBuf {
+    feature_worktree_path(workdir, slug)
+        .join(GBA_DIR)
+        .join(slug)
+}
+
+/// Get the feature's state.yml file path.
+///
+/// Returns `.trees/{slug}/.gba/{slug}/state.yml`
+#[must_use]
+pub fn feature_state_file(workdir: &Path, slug: &str) -> PathBuf {
+    feature_gba_dir(workdir, slug).join("state.yml")
+}
+
+/// Get the feature's specs directory path.
+///
+/// Returns `.trees/{slug}/.gba/{slug}/specs/`
+#[must_use]
+pub fn feature_specs_dir(workdir: &Path, slug: &str) -> PathBuf {
+    feature_gba_dir(workdir, slug).join("specs")
+}
+
+/// Check if a feature exists (has state.yml).
+#[must_use]
+pub fn feature_exists(workdir: &Path, slug: &str) -> bool {
+    feature_state_file(workdir, slug).exists()
 }
 
 /// Check if GBA is initialized in the given workdir.
@@ -176,6 +219,63 @@ pub fn load_feature_state(workdir: &Path, slug: &str) -> Result<FeatureState, Cl
     FeatureState::load(&feature_dir)
 }
 
+/// Create the GBA engine with prompts loaded from the tasks directory.
+///
+/// # Arguments
+///
+/// * `workdir` - Main repository working directory (for loading tasks)
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Tasks directory not found
+/// - Failed to load prompts
+/// - Failed to create engine
+pub fn create_engine(workdir: &Path) -> Result<Engine<'static>, CliError> {
+    create_engine_with_context(workdir, workdir)
+}
+
+/// Create the GBA engine with a custom context working directory.
+///
+/// This is useful when the engine should operate in a different directory
+/// than where the tasks are loaded from (e.g., in a worktree).
+///
+/// # Arguments
+///
+/// * `workdir` - Main repository working directory (for loading tasks)
+/// * `context_workdir` - Working directory for the engine context
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Tasks directory not found
+/// - Failed to load prompts
+/// - Failed to create engine
+pub fn create_engine_with_context(
+    workdir: &Path,
+    context_workdir: &Path,
+) -> Result<Engine<'static>, CliError> {
+    let tasks_dir = workdir.join("tasks");
+
+    if !tasks_dir.exists() {
+        return Err(CliError::Config(format!(
+            "tasks directory not found: {}",
+            tasks_dir.display()
+        )));
+    }
+
+    let mut prompts = PromptManager::new();
+    prompts.load_dir(&tasks_dir)?;
+
+    let config = EngineConfig::builder()
+        .workdir(context_workdir)
+        .prompts(prompts)
+        .build();
+
+    let engine = Engine::new(config)?;
+    Ok(engine)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +309,41 @@ mod tests {
     fn test_trees_dir() {
         let workdir = PathBuf::from("/tmp/repo");
         assert_eq!(trees_dir(&workdir), PathBuf::from("/tmp/repo/.trees"));
+    }
+
+    #[test]
+    fn test_feature_worktree_path() {
+        let workdir = PathBuf::from("/tmp/repo");
+        assert_eq!(
+            feature_worktree_path(&workdir, "my-feature"),
+            PathBuf::from("/tmp/repo/.trees/my-feature")
+        );
+    }
+
+    #[test]
+    fn test_feature_gba_dir() {
+        let workdir = PathBuf::from("/tmp/repo");
+        assert_eq!(
+            feature_gba_dir(&workdir, "my-feature"),
+            PathBuf::from("/tmp/repo/.trees/my-feature/.gba/my-feature")
+        );
+    }
+
+    #[test]
+    fn test_feature_state_file() {
+        let workdir = PathBuf::from("/tmp/repo");
+        assert_eq!(
+            feature_state_file(&workdir, "my-feature"),
+            PathBuf::from("/tmp/repo/.trees/my-feature/.gba/my-feature/state.yml")
+        );
+    }
+
+    #[test]
+    fn test_feature_specs_dir() {
+        let workdir = PathBuf::from("/tmp/repo");
+        assert_eq!(
+            feature_specs_dir(&workdir, "my-feature"),
+            PathBuf::from("/tmp/repo/.trees/my-feature/.gba/my-feature/specs")
+        );
     }
 }
