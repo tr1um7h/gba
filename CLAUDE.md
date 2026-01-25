@@ -2,8 +2,6 @@
 
 For project-specific documentation including architecture, directory structure, and development commands, see [`.gba.md`](.gba.md).
 
-# Rust guidelines
-
 ## Toolchain & Build
 
 - Always use Rust 2024 edition with latest stable version. Pin version in `rust-toolchain.toml`.
