@@ -3,6 +3,7 @@
 //! This module cleans up local worktrees and branches for PRs that have been
 //! closed or merged.
 
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -79,11 +80,11 @@ pub async fn run_clean(workdir: &Path, dry_run: bool, force: bool) -> Result<(),
     if to_clean.is_empty() {
         println!();
         println!("No worktrees to clean up.");
-        let closed_count = count_closed_prs(&to_keep);
-        if closed_count > 0 {
+        let force_count = count_force_required(&to_keep);
+        if force_count > 0 {
             println!(
-                "Use --force to also clean {} closed (not merged) PR(s).",
-                closed_count
+                "Use --force to also clean {} worktree(s) with open PRs or no PR.",
+                force_count
             );
         }
         return Ok(());
@@ -96,6 +97,29 @@ pub async fn run_clean(workdir: &Path, dry_run: bool, force: bool) -> Result<(),
             println!("  - {} ({})", wt.slug, wt.path);
         }
     } else {
+        // Count worktrees that require force (open PRs or no PR)
+        let force_count = count_force_required(&to_clean);
+
+        // If force flag is set and there are worktrees with no PR, require confirmation
+        if force && force_count > 0 {
+            println!(
+                "WARNING: You are about to delete {} worktree(s) with no PR:",
+                force_count
+            );
+            for wt in &to_clean {
+                if wt.pr_status.is_none() {
+                    println!("  - {}", wt.slug);
+                }
+            }
+            println!();
+
+            if !confirm_action("Are you sure you want to continue? (y/N): ")? {
+                println!("Aborted.");
+                return Ok(());
+            }
+            println!();
+        }
+
         println!("Cleaning up {} worktree(s)...", to_clean.len());
 
         for wt in &to_clean {
@@ -225,13 +249,15 @@ fn parse_pr_state(state: &str) -> Option<PrStatus> {
 ///
 /// Returns true if:
 /// - PR is merged (always clean)
-/// - PR is closed AND force flag is set
+/// - PR is closed (always clean)
+/// - PR is open (never clean, even with force)
+/// - No PR AND force flag is set
 fn should_clean(status: Option<&PrStatus>, force: bool) -> bool {
     match status {
         Some(PrStatus::Merged) => true,
-        Some(PrStatus::Closed) => force,
+        Some(PrStatus::Closed) => true,
         Some(PrStatus::Open) => false,
-        None => false,
+        None => force,
     }
 }
 
@@ -256,12 +282,27 @@ fn classify_worktrees(
     (to_clean, to_keep)
 }
 
-/// Count worktrees with closed (not merged) PRs.
-fn count_closed_prs(worktrees: &[WorktreeInfo]) -> usize {
-    worktrees
-        .iter()
-        .filter(|w| w.pr_status == Some(PrStatus::Closed))
-        .count()
+/// Count worktrees with no PR (require force flag).
+fn count_force_required(worktrees: &[WorktreeInfo]) -> usize {
+    worktrees.iter().filter(|w| w.pr_status.is_none()).count()
+}
+
+/// Prompt the user for confirmation.
+fn confirm_action(prompt: &str) -> Result<bool, CliError> {
+    print!("{prompt}");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| CliError::Io(format!("failed to flush stdout: {e}")))?;
+
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    stdin
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| CliError::Io(format!("failed to read line: {e}")))?;
+
+    let answer = line.trim().to_lowercase();
+    Ok(answer == "y" || answer == "yes")
 }
 
 /// Clean up a worktree and its branch.
@@ -355,8 +396,8 @@ mod tests {
     }
 
     #[test]
-    fn test_should_clean_closed_only_with_force() {
-        assert!(!should_clean(Some(&PrStatus::Closed), false));
+    fn test_should_clean_closed_always() {
+        assert!(should_clean(Some(&PrStatus::Closed), false));
         assert!(should_clean(Some(&PrStatus::Closed), true));
     }
 
@@ -367,9 +408,9 @@ mod tests {
     }
 
     #[test]
-    fn test_should_clean_none_never() {
+    fn test_should_clean_none_only_with_force() {
         assert!(!should_clean(None, false));
-        assert!(!should_clean(None, true));
+        assert!(should_clean(None, true));
     }
 
     // Tests for classify_worktrees
@@ -403,12 +444,15 @@ mod tests {
 
         let (to_clean, to_keep) = classify_worktrees(worktrees, false);
 
-        assert_eq!(to_clean.len(), 1);
-        assert_eq!(to_clean[0].slug, "merged");
+        // Without force: merged and closed are cleaned
+        assert_eq!(to_clean.len(), 2);
+        let clean_slugs: Vec<&str> = to_clean.iter().map(|w| w.slug.as_str()).collect();
+        assert!(clean_slugs.contains(&"merged"));
+        assert!(clean_slugs.contains(&"closed"));
 
-        assert_eq!(to_keep.len(), 3);
+        // Open and no-pr are kept
+        assert_eq!(to_keep.len(), 2);
         let keep_slugs: Vec<&str> = to_keep.iter().map(|w| w.slug.as_str()).collect();
-        assert!(keep_slugs.contains(&"closed"));
         assert!(keep_slugs.contains(&"open"));
         assert!(keep_slugs.contains(&"no-pr"));
     }
@@ -424,35 +468,37 @@ mod tests {
 
         let (to_clean, to_keep) = classify_worktrees(worktrees, true);
 
-        assert_eq!(to_clean.len(), 2);
+        // With force: merged, closed, and no-pr are cleaned; open is kept
+        assert_eq!(to_clean.len(), 3);
         let clean_slugs: Vec<&str> = to_clean.iter().map(|w| w.slug.as_str()).collect();
         assert!(clean_slugs.contains(&"merged"));
         assert!(clean_slugs.contains(&"closed"));
+        assert!(clean_slugs.contains(&"no-pr"));
 
-        assert_eq!(to_keep.len(), 2);
-        let keep_slugs: Vec<&str> = to_keep.iter().map(|w| w.slug.as_str()).collect();
-        assert!(keep_slugs.contains(&"open"));
-        assert!(keep_slugs.contains(&"no-pr"));
+        assert_eq!(to_keep.len(), 1);
+        assert_eq!(to_keep[0].slug, "open");
     }
 
-    // Tests for count_closed_prs
+    // Tests for count_force_required
     #[test]
-    fn test_count_closed_prs_none() {
+    fn test_count_force_required_none() {
+        let worktrees = vec![
+            make_worktree("merged", "feature/001-merged", Some(PrStatus::Merged)),
+            make_worktree("closed", "feature/002-closed", Some(PrStatus::Closed)),
+            make_worktree("open", "feature/001-open", Some(PrStatus::Open)),
+        ];
+        assert_eq!(count_force_required(&worktrees), 0);
+    }
+
+    #[test]
+    fn test_count_force_required_some() {
         let worktrees = vec![
             make_worktree("open", "feature/001-open", Some(PrStatus::Open)),
-            make_worktree("no-pr", "feature/002-no-pr", None),
-        ];
-        assert_eq!(count_closed_prs(&worktrees), 0);
-    }
-
-    #[test]
-    fn test_count_closed_prs_some() {
-        let worktrees = vec![
-            make_worktree("closed1", "feature/001-closed1", Some(PrStatus::Closed)),
-            make_worktree("open", "feature/002-open", Some(PrStatus::Open)),
-            make_worktree("closed2", "feature/003-closed2", Some(PrStatus::Closed)),
+            make_worktree("no-pr1", "feature/002-no-pr1", None),
+            make_worktree("no-pr2", "feature/003-no-pr2", None),
             make_worktree("merged", "feature/004-merged", Some(PrStatus::Merged)),
         ];
-        assert_eq!(count_closed_prs(&worktrees), 2);
+        // only no-pr worktrees require force
+        assert_eq!(count_force_required(&worktrees), 2);
     }
 }
