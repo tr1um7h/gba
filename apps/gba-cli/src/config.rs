@@ -26,6 +26,16 @@ const fn default_auto_commit() -> bool {
     true
 }
 
+/// Default value for auto_pr setting.
+const fn default_auto_pr() -> bool {
+    true
+}
+
+/// Default value for auto_push setting.
+const fn default_auto_push() -> bool {
+    false
+}
+
 /// Default branch pattern for feature branches.
 fn default_branch_pattern() -> String {
     "feature/{id}-{slug}".to_string()
@@ -182,6 +192,14 @@ pub struct GitConfig {
     #[serde(default = "default_auto_commit")]
     pub auto_commit: bool,
 
+    /// Whether to auto-create PR after completing all phases.
+    #[serde(default = "default_auto_pr")]
+    pub auto_pr: bool,
+
+    /// Whether to auto-push to remote after state updates.
+    #[serde(default = "default_auto_push")]
+    pub auto_push: bool,
+
     /// Branch naming pattern.
     ///
     /// Available variables: `{id}`, `{slug}`
@@ -193,6 +211,8 @@ impl Default for GitConfig {
     fn default() -> Self {
         Self {
             auto_commit: default_auto_commit(),
+            auto_pr: default_auto_pr(),
+            auto_push: default_auto_push(),
             branch_pattern: default_branch_pattern(),
         }
     }
@@ -246,6 +266,8 @@ prompts:
     - ~/.config/gba/prompts
 git:
   autoCommit: false
+  autoPr: false
+  autoPush: true
   branchPattern: "feat/{id}/{slug}"
 review:
   enabled: false
@@ -261,6 +283,8 @@ review:
         assert_eq!(config.agent.budget_limit, Some(10.0));
         assert_eq!(config.prompts.include, vec!["~/.config/gba/prompts"]);
         assert!(!config.git.auto_commit);
+        assert!(!config.git.auto_pr);
+        assert!(config.git.auto_push);
         assert_eq!(config.git.branch_pattern, "feat/{id}/{slug}");
         assert!(!config.review.enabled);
         assert_eq!(config.review.provider, "claude");
@@ -273,6 +297,8 @@ review:
 
         assert!(yaml.contains("permissionMode: auto"));
         assert!(yaml.contains("autoCommit: true"));
+        assert!(yaml.contains("autoPr: true"));
+        assert!(yaml.contains("autoPush: false"));
     }
 
     #[test]
@@ -284,6 +310,8 @@ review:
         assert!(config.agent.budget_limit.is_none());
         assert!(config.prompts.include.is_empty());
         assert!(config.git.auto_commit);
+        assert!(config.git.auto_pr);
+        assert!(!config.git.auto_push);
         assert_eq!(config.git.branch_pattern, "feature/{id}-{slug}");
         assert!(config.review.enabled);
         assert_eq!(config.review.provider, "codex");
