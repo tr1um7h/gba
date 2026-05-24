@@ -544,6 +544,10 @@ async fn execute_full_pipeline_with_tui(
     }
 
     // === Phase 4: PR Creation ===
+    // Load GBA configuration (needed for both PR creation and state push)
+    let gba_dir = workdir.join(".gba");
+    let config = GbaConfig::load(&gba_dir)?;
+
     if dry_run {
         let _ = tx
             .send(RunMessage::Activity(
@@ -551,10 +555,6 @@ async fn execute_full_pipeline_with_tui(
             ))
             .await;
     } else {
-        // Load GBA configuration for PR creation gate
-        let gba_dir = workdir.join(".gba");
-        let config = GbaConfig::load(&gba_dir)?;
-
         let _ = tx.send(RunMessage::PrCreationStarted).await;
 
         match create_pull_request(&engine, &ctx, &mut state, &config).await {
@@ -590,7 +590,7 @@ async fn execute_full_pipeline_with_tui(
     if !dry_run
         && state.result.pr_url.is_some()
         && let Err(e) =
-            commit_and_push_state_update(&ctx, &state.feature.slug, state.result.pr_number)
+            commit_and_push_state_update(&ctx, &state.feature.slug, state.result.pr_number, &config)
     {
         warn!("Failed to commit/push state update: {}", e);
         // Non-fatal: PR was created successfully, state just wasn't persisted to git
@@ -1116,15 +1116,20 @@ fn get_latest_commit_sha(ctx: &TaskContext) -> Result<Option<String>, CliError> 
     repo.head_short_sha().map_err(Into::into)
 }
 
-/// Commit and push state.yml changes after PR creation.
+/// Commit and optionally push state.yml changes after PR creation.
 ///
 /// This ensures PR information (url, number) is persisted in the repository.
+/// The function respects the `auto_push` configuration setting and checks
+/// for remote origin availability. If auto_push is disabled or no remote
+/// origin exists, only the commit is performed (no push).
+///
 /// The function is non-fatal: if commit/push fails, it logs a warning but
 /// does not fail the overall execution.
 fn commit_and_push_state_update(
     ctx: &TaskContext,
     feature_slug: &str,
     pr_number: Option<u32>,
+    config: &GbaConfig,
 ) -> Result<(), CliError> {
     let state_file = format!(".gba/{}/state.yml", feature_slug);
     let repo = GitRepo::new(&ctx.worktree_path);
@@ -1141,6 +1146,18 @@ fn commit_and_push_state_update(
     if let Err(e) = repo.commit(&commit_msg) {
         // Commit may fail if no changes (already committed) - this is ok
         tracing::debug!("state commit failed (may be no changes): {}", e);
+    }
+
+    // Check if auto_push is disabled
+    if !config.git.auto_push {
+        info!("auto_push is disabled, skipping state push");
+        return Ok(());
+    }
+
+    // Check if repository has a valid remote origin
+    if !repo.has_remote_origin() {
+        info!("No remote origin configured, skipping state push");
+        return Ok(());
     }
 
     // Push to origin
