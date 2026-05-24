@@ -472,6 +472,75 @@ impl GitRepo {
 
         Ok(())
     }
+
+    /// Check if the repository has a valid remote origin configured.
+    ///
+    /// Returns `false` if there is no remote origin, or if the remote URL
+    /// points to a local path (indicating a local-only repository).
+    ///
+    /// A remote is considered valid if it uses one of these protocols:
+    /// - SSH: `git@host:path` or `user@host:path`
+    /// - HTTPS: `https://host/path`
+    /// - HTTP: `http://host/path`
+    /// - SSH protocol: `ssh://user@host/path`
+    ///
+    /// URLs that start with `file://`, `/`, `./`, or `../` are considered
+    /// local paths and will return `false`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use gba_core::git::GitRepo;
+    ///
+    /// let repo = GitRepo::new(".");
+    /// if repo.has_remote_origin() {
+    ///     println!("Repository has a remote origin");
+    /// } else {
+    ///     println!("No remote origin or local-only repository");
+    /// }
+    /// ```
+    pub fn has_remote_origin(&self) -> bool {
+        let output = self
+            .git_cmd()
+            .args(["remote", "get-url", "origin"])
+            .output();
+
+        let Ok(output) = output else { return false };
+        if !output.status.success() {
+            return false;
+        }
+
+        let url = String::from_utf8_lossy(&output.stdout);
+        let url = url.trim();
+
+        // Check if it's a local path
+        if url.starts_with("file://")
+            || url.starts_with('/')
+            || url.starts_with("./")
+            || url.starts_with("../")
+        {
+            return false;
+        }
+
+        // Check for SSH format (git@host:path or user@host:path)
+        // Examples: git@github.com:user/repo.git, deploy@server.com:/path/to/repo
+        if url.contains('@') && url.contains(':') && !url.starts_with("http") {
+            return true;
+        }
+
+        // Check for HTTPS format
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return true;
+        }
+
+        // Check for SSH protocol prefix
+        if url.starts_with("ssh://") {
+            return true;
+        }
+
+        // Treat anything else as potentially local (safe default)
+        false
+    }
 }
 
 /// GitHub CLI operations wrapper.
@@ -915,5 +984,183 @@ mod tests {
         assert!(repo.head_short_sha().is_err());
         assert!(repo.add(".").is_err());
         assert!(repo.commit("test").is_err());
+    }
+
+    // === Remote Detection Tests ===
+
+    #[test]
+    fn test_should_return_false_when_no_remote_configured() {
+        let (_temp_dir, repo) = create_test_repo_with_commit();
+
+        // No remote configured yet
+        assert!(
+            !repo.has_remote_origin(),
+            "Expected no remote origin for fresh repo"
+        );
+    }
+
+    #[test]
+    fn test_should_detect_https_remote_as_valid() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add HTTPS remote
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "https://github.com/user/repo.git"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            repo.has_remote_origin(),
+            "Expected HTTPS remote to be detected as valid"
+        );
+    }
+
+    #[test]
+    fn test_should_detect_http_remote_as_valid() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add HTTP remote
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "http://gitlab.com/user/repo.git"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            repo.has_remote_origin(),
+            "Expected HTTP remote to be detected as valid"
+        );
+    }
+
+    #[test]
+    fn test_should_detect_ssh_git_at_remote_as_valid() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add SSH remote (git@host:path format)
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "git@github.com:user/repo.git"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            repo.has_remote_origin(),
+            "Expected SSH git@ remote to be detected as valid"
+        );
+    }
+
+    #[test]
+    fn test_should_detect_ssh_user_at_remote_as_valid() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add SSH remote with different user (deploy@host:path format)
+        git_cmd(&temp_dir)
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "deploy@server.com:/path/to/repo.git",
+            ])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            repo.has_remote_origin(),
+            "Expected SSH deploy@ remote to be detected as valid"
+        );
+    }
+
+    #[test]
+    fn test_should_detect_ssh_protocol_remote_as_valid() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add SSH protocol remote (ssh:// format)
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "ssh://git@github.com/user/repo.git"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            repo.has_remote_origin(),
+            "Expected SSH protocol remote to be detected as valid"
+        );
+    }
+
+    #[test]
+    fn test_should_reject_file_protocol_remote() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add file:// remote
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "file:///path/to/repo.git"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            !repo.has_remote_origin(),
+            "Expected file:// remote to be rejected as local"
+        );
+    }
+
+    #[test]
+    fn test_should_reject_absolute_path_remote() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add absolute path remote
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "/home/user/repo.git"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            !repo.has_remote_origin(),
+            "Expected absolute path remote to be rejected as local"
+        );
+    }
+
+    #[test]
+    fn test_should_reject_relative_path_remote() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add relative path remote
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "../other/repo.git"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            !repo.has_remote_origin(),
+            "Expected relative path remote to be rejected as local"
+        );
+    }
+
+    #[test]
+    fn test_should_reject_current_dir_relative_path() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add ./ relative path remote
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "./repo.git"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            !repo.has_remote_origin(),
+            "Expected ./ relative path remote to be rejected as local"
+        );
+    }
+
+    #[test]
+    fn test_should_reject_unknown_url_format() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add unknown URL format
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "some-random-string"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            !repo.has_remote_origin(),
+            "Expected unknown URL format to be rejected (safe default)"
+        );
     }
 }

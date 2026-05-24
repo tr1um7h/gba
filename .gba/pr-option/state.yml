@@ -1,0 +1,36 @@
+feature:
+  id: '0001'
+  slug: pr-option
+  createdAt: 2026-05-24T10:31:34.106822Z
+  updatedAt: 2026-05-24T10:35:35.819686Z
+status: inProgress
+currentPhase: 1
+git:
+  worktreePath: .trees/pr-option
+  branch: feature/0001-pr-option
+  baseBranch: master
+phases:
+- name: config-types
+  status: completed
+  startedAt: 2026-05-24T10:32:56.153525Z
+  completedAt: 2026-05-24T10:35:35.819354Z
+  commitSha: bff2f53
+  stats:
+    turns: 35
+    inputTokens: 810538
+    outputTokens: 4385
+    costUsd: 4.162315
+- name: git-remote-detection
+  status: inProgress
+  startedAt: 2026-05-24T10:35:35.819686Z
+- name: pr-creation-gate
+  status: pending
+- name: state-push-gate
+  status: pending
+totalStats:
+  turns: 35
+  inputTokens: 810538
+  outputTokens: 4385
+  costUsd: 4.162315
+result:
+  merged: false
