@@ -2,9 +2,9 @@ feature:
   id: '0001'
   slug: pr-option
   createdAt: 2026-05-24T10:31:34.106822Z
-  updatedAt: 2026-05-24T10:35:35.819686Z
+  updatedAt: 2026-05-24T11:34:49.665618Z
 status: inProgress
-currentPhase: 1
+currentPhase: 3
 git:
   worktreePath: .trees/pr-option
   branch: feature/0001-pr-option
@@ -21,16 +21,47 @@ phases:
     outputTokens: 4385
     costUsd: 4.162315
 - name: git-remote-detection
-  status: inProgress
+  status: completed
   startedAt: 2026-05-24T10:35:35.819686Z
+  completedAt: 2026-05-24T10:37:17.663340Z
+  commitSha: 0a8a018
+  stats:
+    turns: 11
+    inputTokens: 364631
+    outputTokens: 4515
+    costUsd: 1.93603
 - name: pr-creation-gate
-  status: pending
+  status: completed
+  startedAt: 2026-05-24T10:37:17.663695Z
+  completedAt: 2026-05-24T10:39:39.468966Z
+  commitSha: 0ad9426
+  stats:
+    turns: 24
+    inputTokens: 1141841
+    outputTokens: 4226
+    costUsd: 5.814855
 - name: state-push-gate
-  status: pending
+  status: completed
+  startedAt: 2026-05-24T11:34:07.898541Z
+  completedAt: 2026-05-24T11:34:49.665616Z
+  commitSha: 166950a
+  stats:
+    turns: 10
+    inputTokens: 32282
+    outputTokens: 669
+    costUsd: 0.27221500000000004
 totalStats:
-  turns: 35
-  inputTokens: 810538
-  outputTokens: 4385
-  costUsd: 4.162315
+  turns: 105
+  inputTokens: 3377642
+  outputTokens: 20203
+  costUsd: 17.487365
 result:
   merged: false
+  review:
+    status: passed
+    iterations: 2
+    completedAt: 2026-05-24T11:42:01.371774Z
+  verification:
+    status: passed
+    iterations: 1
+    completedAt: 2026-05-24T11:42:56.118326Z
