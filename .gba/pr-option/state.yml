@@ -2,8 +2,8 @@ feature:
   id: '0001'
   slug: pr-option
   createdAt: 2026-05-24T10:31:34.106822Z
-  updatedAt: 2026-05-24T11:34:49.665618Z
-status: inProgress
+  updatedAt: 2026-05-24T11:44:07.579886Z
+status: completed
 currentPhase: 3
 git:
   worktreePath: .trees/pr-option
@@ -56,6 +56,8 @@ totalStats:
   outputTokens: 20203
   costUsd: 17.487365
 result:
+  prUrl: https://github.com/tyrchen/gba/pull/8
+  prNumber: 8
   merged: false
   review:
     status: passed
