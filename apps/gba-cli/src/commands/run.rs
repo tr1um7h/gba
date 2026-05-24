@@ -548,6 +548,9 @@ async fn execute_full_pipeline_with_tui(
     let gba_dir = workdir.join(".gba");
     let config = GbaConfig::load(&gba_dir)?;
 
+    // Check remote origin once — used by both PR creation and state push
+    let has_remote = GitRepo::new(&ctx.worktree_path).has_remote_origin();
+
     if dry_run {
         let _ = tx
             .send(RunMessage::Activity(
@@ -557,14 +560,27 @@ async fn execute_full_pipeline_with_tui(
     } else {
         let _ = tx.send(RunMessage::PrCreationStarted).await;
 
-        match create_pull_request(&engine, &ctx, &mut state, &config).await {
-            Ok(pr_url) => {
+        match create_pull_request(&engine, &ctx, &mut state, &config, has_remote).await {
+            Ok(PrResult::Created(pr_url)) => {
                 state.result.pr_url = Some(pr_url.clone());
                 state.status = FeatureStatus::Completed;
                 let _ = tx
                     .send(RunMessage::PrCreationCompleted {
                         pr_url: Some(pr_url),
                     })
+                    .await;
+            }
+            Ok(PrResult::Skipped(reason)) => {
+                info!("PR creation skipped: {}", reason);
+                state.status = FeatureStatus::Completed;
+                let _ = tx
+                    .send(RunMessage::PrCreationCompleted { pr_url: None })
+                    .await;
+                let _ = tx
+                    .send(RunMessage::Activity(format!(
+                        "PR creation skipped: {}",
+                        reason
+                    )))
                     .await;
             }
             Err(e) => {
@@ -586,11 +602,15 @@ async fn execute_full_pipeline_with_tui(
     }
     state.save(&feature_dir)?;
 
-    // Commit and push state.yml to persist PR info
+    // Commit and push state.yml to persist PR info (also runs when PR was skipped)
     if !dry_run
-        && state.result.pr_url.is_some()
-        && let Err(e) =
-            commit_and_push_state_update(&ctx, &state.feature.slug, state.result.pr_number, &config)
+        && let Err(e) = commit_and_push_state_update(
+            &ctx,
+            &state.feature.slug,
+            state.result.pr_number,
+            &config,
+            has_remote,
+        )
     {
         warn!("Failed to commit/push state update: {}", e);
         // Non-fatal: PR was created successfully, state just wasn't persisted to git
@@ -1130,6 +1150,7 @@ fn commit_and_push_state_update(
     feature_slug: &str,
     pr_number: Option<u32>,
     config: &GbaConfig,
+    has_remote: bool,
 ) -> Result<(), CliError> {
     let state_file = format!(".gba/{}/state.yml", feature_slug);
     let repo = GitRepo::new(&ctx.worktree_path);
@@ -1155,7 +1176,7 @@ fn commit_and_push_state_update(
     }
 
     // Check if repository has a valid remote origin
-    if !repo.has_remote_origin() {
+    if !has_remote {
         info!("No remote origin configured, skipping state push");
         return Ok(());
     }
@@ -1181,19 +1202,20 @@ async fn create_pull_request(
     ctx: &TaskContext,
     state: &mut FeatureState,
     config: &GbaConfig,
-) -> Result<String, CliError> {
+    has_remote: bool,
+) -> Result<PrResult, CliError> {
     // Check if auto_pr is disabled
     if !config.git.auto_pr {
         info!("auto_pr is disabled, skipping PR creation");
-        return Ok("PR creation skipped (auto_pr disabled in config)".to_string());
+        return Ok(PrResult::Skipped("auto_pr disabled in config".to_string()));
     }
 
     // Check if repository has a valid remote origin
-    let repo = GitRepo::new(&ctx.worktree_path);
-    if !repo.has_remote_origin() {
+    if !has_remote {
         info!("No remote origin configured, skipping PR creation");
-        return Ok("PR creation skipped (no remote origin)".to_string());
+        return Ok(PrResult::Skipped("no remote origin".to_string()));
     }
+
     // Build context for PR task
     let phases_context: Vec<serde_json::Value> = state
         .phases
@@ -1258,7 +1280,15 @@ async fn create_pull_request(
         state.result.pr_number = Some(number);
     }
 
-    Ok(pr_url)
+    Ok(PrResult::Created(pr_url))
+}
+
+/// Result of PR creation attempt.
+enum PrResult {
+    /// PR was created successfully with this URL.
+    Created(String),
+    /// PR creation was skipped for the given reason.
+    Skipped(String),
 }
 
 #[cfg(test)]

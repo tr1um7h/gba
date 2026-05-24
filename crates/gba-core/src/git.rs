@@ -538,6 +538,11 @@ impl GitRepo {
             return true;
         }
 
+        // Check for git protocol prefix
+        if url.starts_with("git://") {
+            return true;
+        }
+
         // Treat anything else as potentially local (safe default)
         false
     }
@@ -1091,6 +1096,22 @@ mod tests {
         assert!(
             repo.has_remote_origin(),
             "Expected SSH protocol remote to be detected as valid"
+        );
+    }
+
+    #[test]
+    fn test_should_detect_git_protocol_remote_as_valid() {
+        let (temp_dir, repo) = create_test_repo_with_commit();
+
+        // Add git:// protocol remote
+        git_cmd(&temp_dir)
+            .args(["remote", "add", "origin", "git://github.com/user/repo.git"])
+            .output()
+            .expect("failed to add remote");
+
+        assert!(
+            repo.has_remote_origin(),
+            "Expected git:// remote to be detected as valid"
         );
     }
 
