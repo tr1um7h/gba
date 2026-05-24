@@ -1005,7 +1005,12 @@ mod tests {
 
         // Add HTTPS remote
         git_cmd(&temp_dir)
-            .args(["remote", "add", "origin", "https://github.com/user/repo.git"])
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/user/repo.git",
+            ])
             .output()
             .expect("failed to add remote");
 
@@ -1074,7 +1079,12 @@ mod tests {
 
         // Add SSH protocol remote (ssh:// format)
         git_cmd(&temp_dir)
-            .args(["remote", "add", "origin", "ssh://git@github.com/user/repo.git"])
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "ssh://git@github.com/user/repo.git",
+            ])
             .output()
             .expect("failed to add remote");
 

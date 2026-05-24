@@ -16,6 +16,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::config::GbaConfig;
 use crate::error::CliError;
 use crate::state::{
     CheckResultState, CheckResultStatus, FeatureState, FeatureStatus, PhaseStatus, TaskStats,
@@ -550,9 +551,13 @@ async fn execute_full_pipeline_with_tui(
             ))
             .await;
     } else {
+        // Load GBA configuration for PR creation gate
+        let gba_dir = workdir.join(".gba");
+        let config = GbaConfig::load(&gba_dir)?;
+
         let _ = tx.send(RunMessage::PrCreationStarted).await;
 
-        match create_pull_request(&engine, &ctx, &mut state).await {
+        match create_pull_request(&engine, &ctx, &mut state, &config).await {
             Ok(pr_url) => {
                 state.result.pr_url = Some(pr_url.clone());
                 state.status = FeatureStatus::Completed;
@@ -1150,11 +1155,28 @@ fn commit_and_push_state_update(
 /// - Committing any pending changes
 /// - Pushing the branch
 /// - Creating the PR with a detailed description
+///
+/// This function respects the `auto_pr` configuration setting and checks
+/// for remote origin availability. If auto_pr is disabled or no remote
+/// origin exists, the PR creation is skipped.
 async fn create_pull_request(
     engine: &Engine<'_>,
     ctx: &TaskContext,
     state: &mut FeatureState,
+    config: &GbaConfig,
 ) -> Result<String, CliError> {
+    // Check if auto_pr is disabled
+    if !config.git.auto_pr {
+        info!("auto_pr is disabled, skipping PR creation");
+        return Ok("PR creation skipped (auto_pr disabled in config)".to_string());
+    }
+
+    // Check if repository has a valid remote origin
+    let repo = GitRepo::new(&ctx.worktree_path);
+    if !repo.has_remote_origin() {
+        info!("No remote origin configured, skipping PR creation");
+        return Ok("PR creation skipped (no remote origin)".to_string());
+    }
     // Build context for PR task
     let phases_context: Vec<serde_json::Value> = state
         .phases
