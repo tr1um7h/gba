@@ -4,8 +4,8 @@
 //! including phase execution, auto-commit, code review, verification,
 //! and PR creation with resume support.
 //!
-//! The execution uses a TUI to display progress with streaming output
-//! that clears between phases (not accumulates).
+//! The execution uses a browser-based UI to display progress with
+//! streaming output that clears between phases (not accumulates).
 
 use std::path::{Path, PathBuf};
 
@@ -21,13 +21,13 @@ use crate::error::CliError;
 use crate::state::{
     CheckResultState, CheckResultStatus, FeatureState, FeatureStatus, PhaseStatus, TaskStats,
 };
-use crate::tui::{
-    CheckFinalResult, CheckIterationResult, CheckType, RunApp, RunMessage, TuiEventHandler,
-};
 use crate::utils;
+use crate::web::{
+    CheckFinalResult, CheckIterationResult, CheckType, RunMessage, TuiEventHandler, WebRunApp,
+};
 
 /// Maximum number of fix iterations for review and verification loops.
-const MAX_FIX_ITERATIONS: u32 = 3;
+const MAX_FIX_ITERATIONS: u32 = 1;
 
 /// Configuration for a check-fix loop (review or verification).
 #[derive(Debug, Clone)]
@@ -224,7 +224,7 @@ struct PreparedExecution {
     is_resuming: bool,
 }
 
-/// Context for TUI-based phase execution.
+/// Context for Web UI-based phase execution.
 struct TuiExecutionContext {
     /// Path to the working directory.
     workdir: PathBuf,
@@ -245,12 +245,12 @@ struct TuiExecutionContext {
 /// This function orchestrates the full execution pipeline:
 /// 1. Load and validate feature state
 /// 2. Detect resume point or start fresh
-/// 3. Execute remaining phases with auto-commit (shown in TUI)
-/// 4. Run code review (shown in TUI)
-/// 5. Run verification (shown in TUI)
-/// 6. Create pull request (shown in TUI)
+/// 3. Execute remaining phases with auto-commit (shown in Web UI)
+/// 4. Run code review (shown in Web UI)
+/// 5. Run verification (shown in Web UI)
+/// 6. Create pull request (shown in Web UI)
 ///
-/// All stages are displayed in the TUI with streaming output
+/// All stages are displayed in the Web UI with streaming output
 /// that clears between phases for better readability.
 ///
 /// # Errors
@@ -280,11 +280,11 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     state.feature.updated_at = Utc::now();
     state.save(&feature_dir)?;
 
-    // Create channel for TUI messages
+    // Create channel for Web UI messages
     let (tx, rx) = mpsc::channel::<RunMessage>(100);
 
-    // Create TUI app from current state
-    let mut app = RunApp::new(&state);
+    // Create Web UI app from current state
+    let app = WebRunApp::new(&state);
 
     // Capture dry_run before moving into exec_ctx
     let dry_run = options.dry_run;
@@ -301,9 +301,9 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
 
     // Spawn execution worker that handles the full pipeline
     let worker_handle =
-        tokio::spawn(async move { execute_full_pipeline_with_tui(exec_ctx, state, tx).await });
+        tokio::spawn(async move { execute_full_pipeline_with_ui(exec_ctx, state, tx).await });
 
-    // Run TUI event loop (blocks until complete or error)
+    // Run Web UI event loop (blocks until complete or error)
     app.run(rx).await?;
 
     // Wait for worker and get updated state
@@ -327,19 +327,19 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
     Ok(())
 }
 
-/// Execute the full pipeline with TUI integration.
+/// Execute the full pipeline with Web UI integration.
 ///
 /// This function runs in a spawned task and sends `RunMessage` events
-/// to the TUI via the provided channel. It handles:
+/// to the Web UI via the provided channel. It handles:
 /// 1. Phase execution
 /// 2. Code review with fix loop
 /// 3. Verification with fix loop
 /// 4. PR creation
 ///
-/// The function monitors the TUI channel and aborts gracefully if the TUI is closed.
+/// The function monitors the Web UI channel and aborts gracefully if the UI is closed.
 ///
 /// Returns the updated state and the result of the pipeline.
-async fn execute_full_pipeline_with_tui(
+async fn execute_full_pipeline_with_ui(
     exec_ctx: TuiExecutionContext,
     mut state: FeatureState,
     tx: mpsc::Sender<RunMessage>,
@@ -375,12 +375,12 @@ async fn execute_full_pipeline_with_tui(
         return Ok((state, phase_result));
     }
 
-    // Check if TUI is still running before continuing to checks
+    // Check if Web UI is still running before continuing to checks
     if tx.is_closed() {
-        warn!("TUI closed, aborting pipeline after phases");
+        warn!("UI closed, aborting pipeline after phases");
         return Ok((
             state,
-            Err(CliError::InvalidState("TUI closed by user".to_string())),
+            Err(CliError::InvalidState("UI closed by user".to_string())),
         ));
     }
 
@@ -401,21 +401,16 @@ async fn execute_full_pipeline_with_tui(
             .await
             .is_err()
         {
-            warn!("TUI closed, aborting pipeline before review");
+            warn!("UI closed, aborting pipeline before review");
             return Ok((
                 state,
-                Err(CliError::InvalidState("TUI closed by user".to_string())),
+                Err(CliError::InvalidState("UI closed by user".to_string())),
             ));
         }
 
-        let (review_result, review_iterations) = run_check_fix_loop_with_tui(
-            &engine,
-            &ctx,
-            &CheckConfig::REVIEW,
-            CheckType::Review,
-            &tx,
-        )
-        .await;
+        let (review_result, review_iterations) =
+            run_check_fix_loop_with_ui(&engine, &ctx, &CheckConfig::REVIEW, CheckType::Review, &tx)
+                .await;
 
         // Persist review result to state
         state.result.review = Some(CheckResultState {
@@ -454,12 +449,12 @@ async fn execute_full_pipeline_with_tui(
             }
         }
 
-        // Check if TUI is still running
+        // Check if Web UI is still running
         if tx.is_closed() {
-            warn!("TUI closed, aborting pipeline after review");
+            warn!("UI closed, aborting pipeline after review");
             return Ok((
                 state,
-                Err(CliError::InvalidState("TUI closed by user".to_string())),
+                Err(CliError::InvalidState("UI closed by user".to_string())),
             ));
         }
 
@@ -472,14 +467,14 @@ async fn execute_full_pipeline_with_tui(
             .await
             .is_err()
         {
-            warn!("TUI closed, aborting pipeline before verification");
+            warn!("UI closed, aborting pipeline before verification");
             return Ok((
                 state,
-                Err(CliError::InvalidState("TUI closed by user".to_string())),
+                Err(CliError::InvalidState("UI closed by user".to_string())),
             ));
         }
 
-        let (verification_result, verification_iterations) = run_check_fix_loop_with_tui(
+        let (verification_result, verification_iterations) = run_check_fix_loop_with_ui(
             &engine,
             &ctx,
             &CheckConfig::VERIFICATION,
@@ -534,12 +529,12 @@ async fn execute_full_pipeline_with_tui(
         }
     }
 
-    // Check if TUI is still running before PR creation
+    // Check if Web UI is still running before PR creation
     if tx.is_closed() {
-        warn!("TUI closed, aborting pipeline before PR creation");
+        warn!("UI closed, aborting pipeline before PR creation");
         return Ok((
             state,
-            Err(CliError::InvalidState("TUI closed by user".to_string())),
+            Err(CliError::InvalidState("UI closed by user".to_string())),
         ));
     }
 
@@ -632,10 +627,10 @@ fn check_final_result_to_status(result: &CheckFinalResult) -> CheckResultStatus 
     }
 }
 
-/// Execute phases (internal helper for `execute_full_pipeline_with_tui`).
+/// Execute phases (internal helper for `execute_full_pipeline_with_ui`).
 ///
 /// This helper function requires many parameters because it needs access to
-/// execution context, state, and the TUI channel. Using a struct would
+/// execution context, state, and the Web UI channel. Using a struct would
 /// complicate the borrowed lifetimes unnecessarily.
 #[allow(clippy::too_many_arguments)]
 async fn execute_phases_inner(
@@ -653,7 +648,7 @@ async fn execute_phases_inner(
     for phase_idx in start_phase..total_phases {
         let phase_name = state.phases[phase_idx].name.clone();
 
-        // Send phase started message to TUI
+        // Send phase started message to Web UI
         if tx
             .send(RunMessage::PhaseStarted {
                 index: phase_idx,
@@ -662,8 +657,8 @@ async fn execute_phases_inner(
             .await
             .is_err()
         {
-            // TUI closed, abort execution
-            return Err(CliError::InvalidState("TUI channel closed".to_string()));
+            // UI closed, abort execution
+            return Err(CliError::InvalidState("UI channel closed".to_string()));
         }
 
         // Mark phase as in progress
@@ -698,7 +693,7 @@ async fn execute_phases_inner(
             obj.insert("phases".to_string(), json!(phases_context));
         }
 
-        // Create and run the execute task with TUI event handler
+        // Create and run the execute task with Web UI event handler
         let task = Task::new(TaskKind::Execute, context);
         let mut handler = TuiEventHandler::new(tx.clone());
 
@@ -767,7 +762,7 @@ async fn execute_phases_inner(
                     .await;
             }
             Err(e) => {
-                // Send error to TUI
+                // Send error to Web UI
                 let error_msg = format!("phase '{}' failed: {}", phase_name, e);
                 let _ = tx
                     .send(RunMessage::PhaseFailed {
@@ -788,13 +783,13 @@ async fn execute_phases_inner(
     Ok(())
 }
 
-/// Run a check-fix loop with TUI message sending.
+/// Run a check-fix loop with Web UI message sending.
 ///
 /// This function performs the check-fix loop (review or verification)
-/// while sending progress updates to the TUI.
+/// while sending progress updates to the Web UI.
 ///
 /// Returns a tuple of (result, iterations_performed).
-async fn run_check_fix_loop_with_tui(
+async fn run_check_fix_loop_with_ui(
     engine: &Engine<'_>,
     ctx: &TaskContext,
     config: &CheckConfig,
@@ -802,14 +797,14 @@ async fn run_check_fix_loop_with_tui(
     tx: &mpsc::Sender<RunMessage>,
 ) -> (CheckFinalResult, u32) {
     for iteration in 1..=MAX_FIX_ITERATIONS {
-        // Check if TUI is closed before each iteration
+        // Check if Web UI is closed before each iteration
         if tx.is_closed() {
             warn!(
-                "TUI closed, aborting {} at iteration {}",
+                "UI closed, aborting {} at iteration {}",
                 config.name, iteration
             );
             return (
-                CheckFinalResult::Error("TUI closed by user".to_string()),
+                CheckFinalResult::Error("UI closed by user".to_string()),
                 iteration,
             );
         }
@@ -849,9 +844,9 @@ async fn run_check_fix_loop_with_tui(
                         .await;
 
                     if iteration < MAX_FIX_ITERATIONS {
-                        // Check if TUI is closed before attempting fix
+                        // Check if Web UI is closed before attempting fix
                         if tx.is_closed() {
-                            warn!("TUI closed, aborting {} before fix", config.name);
+                            warn!("UI closed, aborting {} before fix", config.name);
                             return (CheckFinalResult::NeedsChanges(output), iteration);
                         }
 
@@ -921,7 +916,7 @@ async fn run_check_fix_loop_with_tui(
     )
 }
 
-/// Run a check (review or verification) with streaming output to TUI.
+/// Run a check (review or verification) with streaming output to Web UI.
 async fn run_check_with_streaming(
     engine: &Engine<'_>,
     ctx: &TaskContext,
@@ -946,7 +941,7 @@ async fn run_check_with_streaming(
     Ok(result.output)
 }
 
-/// Run a fix task with streaming output to TUI.
+/// Run a fix task with streaming output to Web UI.
 async fn run_fix_with_streaming(
     engine: &Engine<'_>,
     ctx: &TaskContext,

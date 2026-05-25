@@ -45,7 +45,7 @@ pub enum Command {
 
     /// Plan a new feature interactively.
     ///
-    /// Opens an interactive TUI session to discuss and plan a new feature.
+    /// Opens an interactive browser-based session to discuss and plan a new feature.
     /// Generates design specs and creates a git worktree for implementation.
     Plan {
         /// Feature slug (e.g., "add-user-auth").

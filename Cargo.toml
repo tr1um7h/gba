@@ -37,9 +37,10 @@ minijinja = { version = "2.14", features = ["loader"] }
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
 
-# TUI
-ratatui = "0.30"
-crossterm = "0.29"
+# Web UI
+axum = { version = "0.8", features = ["ws"] }
+webbrowser = "1.0"
+futures = "0.3"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -58,4 +59,3 @@ tracing-appender = "0.2"
 # Utilities
 typed-builder = "0.23"
 uuid = { version = "1.16", features = ["v4"] }
-futures = "0.3"

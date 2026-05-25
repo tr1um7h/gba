@@ -1,7 +1,7 @@
 //! Plan command implementation.
 //!
 //! This module implements the `gba plan` command which opens an interactive
-//! TUI session to plan a new feature through conversation with Claude.
+//! browser-based session to plan a new feature through conversation with Claude.
 
 use std::path::Path;
 
@@ -15,8 +15,8 @@ use crate::state::{
     FeatureInfo, FeatureResult, FeatureState, FeatureStatus, GitState, PhaseState, PhaseStatus,
     TaskStats,
 };
-use crate::tui::App;
 use crate::utils;
+use crate::web::WebPlanApp;
 
 /// Run the plan command.
 ///
@@ -26,7 +26,7 @@ use crate::utils;
 /// 3. Generates a new feature ID (if new)
 /// 4. Creates git worktree and spec directories
 /// 5. Creates the Engine with prompts loaded
-/// 6. Launches the TUI application
+/// 6. Launches the Web UI application
 /// 7. On completion, generates state.yml if specs exist
 ///
 /// # Arguments
@@ -41,7 +41,7 @@ use crate::utils;
 /// - GBA is not initialized
 /// - Feature is already completed
 /// - Git worktree creation fails
-/// - TUI cannot be launched
+/// - Web UI cannot be launched
 pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> {
     info!(slug = slug, workdir = %workdir.display(), "starting plan command");
 
@@ -87,8 +87,8 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     // Create the engine (context is the worktree, not main repo)
     let engine = utils::create_engine_with_context(workdir, &worktree_path)?;
 
-    // Launch TUI
-    let mut app = App::new(
+    // Launch Web UI
+    let app = WebPlanApp::new(
         slug.to_string(),
         feature_id.clone(),
         base_branch.clone(),
@@ -106,8 +106,8 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     println!("Type /done when planning is complete.");
     println!();
 
-    // Run the TUI
-    app.run(&engine).await.context("TUI error")?;
+    // Run the Web UI
+    app.run(&engine).await.context("Web UI error")?;
 
     // Check if specs were created and approved
     let specs_dir = utils::feature_specs_dir(workdir, slug);

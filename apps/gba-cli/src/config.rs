@@ -31,6 +31,16 @@ const fn default_auto_pr() -> bool {
     true
 }
 
+/// Default web port.
+const fn default_web_port() -> u16 {
+    3456
+}
+
+/// Default web host.
+fn default_web_host() -> String {
+    "127.0.0.1".to_string()
+}
+
 /// Default value for auto_push setting.
 const fn default_auto_push() -> bool {
     false
@@ -51,6 +61,28 @@ fn default_review_provider() -> String {
     "codex".to_string()
 }
 
+/// Web UI configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebConfig {
+    /// Port for the web UI server.
+    #[serde(default = "default_web_port")]
+    pub port: u16,
+
+    /// Host address for the web UI server.
+    #[serde(default = "default_web_host")]
+    pub host: String,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            port: default_web_port(),
+            host: default_web_host(),
+        }
+    }
+}
+
 /// GBA project configuration.
 ///
 /// This is the root configuration structure loaded from `.gba/config.yml`.
@@ -67,6 +99,9 @@ fn default_review_provider() -> String {
 /// review:
 ///   enabled: true
 ///   provider: codex
+/// web:
+///   port: 3456
+///   host: "127.0.0.1"
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +121,10 @@ pub struct GbaConfig {
     /// Review configuration.
     #[serde(default)]
     pub review: ReviewConfig,
+
+    /// Web UI configuration.
+    #[serde(default)]
+    pub web: WebConfig,
 }
 
 impl GbaConfig {

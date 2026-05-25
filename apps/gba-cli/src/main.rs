@@ -19,8 +19,8 @@ mod commands;
 mod config;
 mod error;
 mod state;
-pub mod tui;
 pub mod utils;
+pub mod web;
 
 use cli::{Cli, Command};
 

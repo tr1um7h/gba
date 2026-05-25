@@ -311,7 +311,12 @@ impl Session {
             self.process_message_with_handler(msg, &mut response_text, handler);
         }
 
-        handler.on_complete();
+        handler.on_complete_with_stats(
+            self.stats.turns,
+            self.stats.cost_usd,
+            self.stats.input_tokens,
+            self.stats.output_tokens,
+        );
 
         // Store assistant response
         self.history

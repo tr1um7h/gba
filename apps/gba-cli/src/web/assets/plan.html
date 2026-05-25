@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GBA Plan</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  #header { background: #16213e; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #0f3460; }
+  #header h1 { font-size: 16px; color: #e94560; }
+  #stats { font-size: 13px; color: #a0a0a0; }
+  #cancelBtn { background: #e94560; color: #fff; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  #cancelBtn:hover { background: #c73652; }
+  #cancelBtn:disabled { background: #555; cursor: not-allowed; }
+
+  /* Chat area */
+  #chat { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 8px; line-height: 1.5; font-size: 14px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: #0f3460; color: #fff; }
+  .msg.assistant { align-self: flex-start; background: #1e2a4a; color: #e0e0e0; }
+  .msg.system { align-self: center; color: #a0a0a0; font-size: 12px; font-style: italic; }
+  .msg pre { background: #0d1117; padding: 8px; border-radius: 4px; overflow-x: auto; margin: 4px 0; }
+  .msg code { background: #0d1117; padding: 2px 4px; border-radius: 3px; font-size: 13px; }
+  .msg a { color: #e94560; text-decoration: underline; }
+
+  /* Streaming indicator */
+  .streaming::after { content: "..."; animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* Input area */
+  #inputArea { background: #16213e; padding: 12px 20px; border-top: 1px solid #0f3460; display: flex; gap: 8px; }
+  #inputArea textarea { flex: 1; background: #1a1a2e; color: #e0e0e0; border: 1px solid #0f3460; border-radius: 6px; padding: 8px 12px; font-size: 14px; font-family: inherit; resize: none; outline: none; }
+  #inputArea textarea:focus { border-color: #e94560; }
+  #inputArea button { background: #0f3460; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  #inputArea button:hover { background: #e94560; }
+  #inputArea button:disabled { background: #333; cursor: not-allowed; }
+  #help { text-align: center; padding: 4px; font-size: 11px; color: #666; }
+
+  /* Cancelled overlay */
+  #cancelledOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10; justify-content: center; align-items: center; }
+  #cancelledOverlay.visible { display: flex; }
+  #cancelledBox { background: #16213e; padding: 24px 32px; border-radius: 8px; text-align: center; color: #e94560; font-size: 18px; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div>
+    <h1 id="title">GBA Plan</h1>
+    <span id="stats"></span>
+  </div>
+  <button id="cancelBtn" onclick="cancel()">Cancel</button>
+</div>
+
+<div id="chat"></div>
+
+<div id="inputArea">
+  <textarea id="userInput" rows="2" placeholder="Describe your feature..." autofocus></textarea>
+  <button id="sendBtn" onclick="send()">Send</button>
+</div>
+
+<div id="help">Enter to send &middot; Shift+Enter for newline &middot; /done to finish</div>
+
+<div id="cancelledOverlay"><div id="cancelledBox">Cancelling...</div></div>
+
+<script>
+// --- State ---
+let ws = null;
+let waiting = false;
+let streamingEl = null;
+
+// --- Init ---
+(function init() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(proto + "//" + location.host + "/ws/plan");
+
+  ws.onopen = function() { addSystem("Connected"); };
+  ws.onclose = function() { addSystem("Disconnected"); };
+  ws.onerror = function() {};
+
+  ws.onmessage = function(evt) {
+    try {
+      const msg = JSON.parse(evt.data);
+      switch (msg.type) {
+        case "ready":
+          addAssistant("I'm ready to help you plan your feature.\n\nCan you tell me more about what you want this feature to do? Include any requirements, constraints, or specific details you have in mind.");
+          enableInput();
+          break;
+        case "text":
+          appendStream(msg.content);
+          break;
+        case "complete":
+          finalizeStream();
+          enableInput();
+          updateStats(msg.turns, msg.inputTokens, msg.outputTokens, msg.costUsd);
+          break;
+        case "cancelled":
+          finalizeStream();
+          waiting = false;
+          disableInput();
+          break;
+        case "error":
+          finalizeStream();
+          addSystem("Error: " + msg.message);
+          enableInput();
+          break;
+      }
+    } catch (e) {
+      console.error("Error handling message:", e);
+      enableInput();
+    }
+  };
+
+  // Keyboard shortcuts
+  var input = document.getElementById("userInput");
+  input.addEventListener("keydown", function(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+
+  // Warn on page refresh
+  window.addEventListener("beforeunload", function(e) {
+    e.preventDefault();
+    e.returnValue = "";
+  });
+})();
+
+// --- Actions ---
+function send() {
+  var input = document.getElementById("userInput");
+  var text = input.value.trim();
+  if (!text || waiting) return;
+
+  input.value = "";
+  addMessage("user", text);
+  disableInput();
+
+  var trimmed = text.trim().toLowerCase();
+  if (trimmed === "/done" || trimmed === "/exit") {
+    wsSend({ type: "done" });
+    return;
+  }
+
+  startStream();
+  wsSend({ type: "chat", content: text });
+}
+
+function cancel() {
+  if (ws) wsSend({ type: "cancel" });
+  document.getElementById("cancelledOverlay").classList.add("visible");
+}
+
+// --- WS helpers ---
+function wsSend(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// --- DOM helpers ---
+function addMessage(role, content) {
+  var chat = document.getElementById("chat");
+  var div = document.createElement("div");
+  div.className = "msg " + role;
+  div.textContent = content;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function addSystem(text) {
+  addMessage("system", text);
+}
+
+function addAssistant(content) {
+  var el = addMessage("assistant", content);
+  if (typeof marked !== "undefined") {
+    try { el.innerHTML = marked.parse(content); } catch(_) {}
+  }
+  return el;
+}
+
+function startStream() {
+  waiting = true;
+  streamingEl = document.createElement("div");
+  streamingEl.className = "msg assistant streaming";
+  streamingEl.textContent = "";
+  document.getElementById("chat").appendChild(streamingEl);
+  document.getElementById("chat").scrollTop = document.getElementById("chat").scrollHeight;
+}
+
+function appendStream(text) {
+  if (!streamingEl) startStream();
+  streamingEl.textContent += text;
+  document.getElementById("chat").scrollTop = document.getElementById("chat").scrollHeight;
+}
+
+function finalizeStream() {
+  waiting = false;
+  if (streamingEl) {
+    streamingEl.classList.remove("streaming");
+    if (typeof marked !== "undefined") {
+      var raw = streamingEl.textContent;
+      try { streamingEl.innerHTML = marked.parse(raw); } catch(_) {}
+    }
+    streamingEl = null;
+  }
+}
+
+function updateStats(turns, inputTokens, outputTokens, costUsd) {
+  var totalTokens = inputTokens + outputTokens;
+  document.getElementById("stats").textContent =
+    "Turns: " + turns + " | Tokens: " + totalTokens.toLocaleString() +
+    " (in:" + inputTokens.toLocaleString() + " out:" + outputTokens.toLocaleString() + ")" +
+    " | Cost: $" + (costUsd || 0).toFixed(4);
+}
+
+function enableInput() {
+  waiting = false;
+  document.getElementById("userInput").disabled = false;
+  document.getElementById("sendBtn").disabled = false;
+  document.getElementById("cancelBtn").disabled = false;
+  document.getElementById("userInput").focus();
+}
+
+function disableInput() {
+  waiting = true;
+  document.getElementById("userInput").disabled = true;
+  document.getElementById("sendBtn").disabled = true;
+}
+</script>
+</body>
+</html>
