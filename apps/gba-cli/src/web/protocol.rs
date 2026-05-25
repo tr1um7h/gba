@@ -61,6 +61,8 @@ pub enum RunClientMessage {
 pub enum RunServerMessage {
     /// Server is ready.
     Ready,
+    /// Initial list of all phase names.
+    PhasesList { names: Vec<String> },
     /// Phase started.
     PhaseStarted { index: usize, name: String },
     /// Phase completed.

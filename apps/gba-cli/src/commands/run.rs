@@ -26,9 +26,6 @@ use crate::web::{
     CheckFinalResult, CheckIterationResult, CheckType, RunMessage, TuiEventHandler, WebRunApp,
 };
 
-/// Maximum number of fix iterations for review and verification loops.
-const MAX_FIX_ITERATIONS: u32 = 1;
-
 /// Configuration for a check-fix loop (review or verification).
 #[derive(Debug, Clone)]
 struct CheckConfig {
@@ -222,6 +219,8 @@ struct PreparedExecution {
     start_phase: usize,
     /// Whether this is a resume operation.
     is_resuming: bool,
+    /// Maximum rounds for verification/review iterations.
+    rounds: u32,
 }
 
 /// Context for Web UI-based phase execution.
@@ -238,6 +237,8 @@ struct TuiExecutionContext {
     is_resuming: bool,
     /// Dry run mode (no commits or pushes).
     dry_run: bool,
+    /// Maximum rounds for verification/review iterations.
+    rounds: u32,
 }
 
 /// Execute a planned feature.
@@ -273,6 +274,7 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
         ctx,
         start_phase,
         is_resuming,
+        rounds,
     } = prepared;
 
     // Update state to in_progress
@@ -297,6 +299,7 @@ pub async fn run_run(workdir: &Path, slug: &str, options: RunOptions) -> Result<
         start_phase,
         is_resuming,
         dry_run,
+        rounds,
     };
 
     // Spawn execution worker that handles the full pipeline
@@ -351,6 +354,7 @@ async fn execute_full_pipeline_with_ui(
         start_phase,
         is_resuming,
         dry_run,
+        rounds,
     } = exec_ctx;
 
     // Create engine with worktree as working directory
@@ -396,7 +400,7 @@ async fn execute_full_pipeline_with_ui(
         if tx
             .send(RunMessage::CheckStarted {
                 check_type: CheckType::Review,
-                max_iterations: MAX_FIX_ITERATIONS,
+                max_iterations: rounds,
             })
             .await
             .is_err()
@@ -408,9 +412,15 @@ async fn execute_full_pipeline_with_ui(
             ));
         }
 
-        let (review_result, review_iterations) =
-            run_check_fix_loop_with_ui(&engine, &ctx, &CheckConfig::REVIEW, CheckType::Review, &tx)
-                .await;
+        let (review_result, review_iterations) = run_check_fix_loop_with_ui(
+            &engine,
+            &ctx,
+            &CheckConfig::REVIEW,
+            CheckType::Review,
+            &tx,
+            rounds,
+        )
+        .await;
 
         // Persist review result to state
         state.result.review = Some(CheckResultState {
@@ -462,7 +472,7 @@ async fn execute_full_pipeline_with_ui(
         if tx
             .send(RunMessage::CheckStarted {
                 check_type: CheckType::Verification,
-                max_iterations: MAX_FIX_ITERATIONS,
+                max_iterations: rounds,
             })
             .await
             .is_err()
@@ -480,6 +490,7 @@ async fn execute_full_pipeline_with_ui(
             &CheckConfig::VERIFICATION,
             CheckType::Verification,
             &tx,
+            rounds,
         )
         .await;
 
@@ -795,8 +806,9 @@ async fn run_check_fix_loop_with_ui(
     config: &CheckConfig,
     check_type: CheckType,
     tx: &mpsc::Sender<RunMessage>,
+    max_iterations: u32,
 ) -> (CheckFinalResult, u32) {
-    for iteration in 1..=MAX_FIX_ITERATIONS {
+    for iteration in 1..=max_iterations {
         // Check if Web UI is closed before each iteration
         if tx.is_closed() {
             warn!(
@@ -814,7 +826,7 @@ async fn run_check_fix_loop_with_ui(
             .send(RunMessage::CheckIterationStarted {
                 check_type,
                 iteration,
-                max_iterations: MAX_FIX_ITERATIONS,
+                max_iterations,
             })
             .await;
 
@@ -843,7 +855,7 @@ async fn run_check_fix_loop_with_ui(
                         })
                         .await;
 
-                    if iteration < MAX_FIX_ITERATIONS {
+                    if iteration < max_iterations {
                         // Check if Web UI is closed before attempting fix
                         if tx.is_closed() {
                             warn!("UI closed, aborting {} before fix", config.name);
@@ -874,7 +886,7 @@ async fn run_check_fix_loop_with_ui(
                             CheckFinalResult::NeedsChanges(format!(
                                 "{} still requires changes after {} fix iterations",
                                 capitalize_first(config.name),
-                                MAX_FIX_ITERATIONS
+                                max_iterations
                             )),
                             iteration,
                         );
@@ -910,9 +922,9 @@ async fn run_check_fix_loop_with_ui(
         CheckFinalResult::NeedsChanges(format!(
             "{} still requires changes after {} fix iterations",
             capitalize_first(config.name),
-            MAX_FIX_ITERATIONS
+            max_iterations
         )),
-        MAX_FIX_ITERATIONS,
+        max_iterations,
     )
 }
 
@@ -1064,12 +1076,17 @@ fn prepare_execution(
         )));
     }
 
+    // Load GBA configuration for agent rounds
+    let gba_dir = workdir.join(".gba");
+    let config = GbaConfig::load(&gba_dir)?;
+
     Ok(Some(PreparedExecution {
         feature_dir,
         state,
         ctx,
         start_phase,
         is_resuming,
+        rounds: config.agent.rounds,
     }))
 }
 

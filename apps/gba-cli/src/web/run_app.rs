@@ -184,6 +184,8 @@ struct RunState {
     run_rx: Arc<Mutex<mpsc::Receiver<RunMessage>>>,
     /// Shutdown signal for the server.
     shutdown_tx: tokio::sync::watch::Sender<bool>,
+    /// Phase names to send on connect.
+    phase_names: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +196,8 @@ struct RunState {
 pub struct WebRunApp {
     /// Feature slug being executed.
     feature_slug: String,
+    /// Phase names for initial display.
+    phase_names: Vec<String>,
     /// Web server host.
     host: String,
     /// Web server port.
@@ -211,8 +215,10 @@ impl std::fmt::Debug for WebRunApp {
 impl WebRunApp {
     /// Create a new web run application from feature state.
     pub fn new(state: &crate::state::FeatureState) -> Self {
+        let phase_names = state.phases.iter().map(|p| p.name.clone()).collect();
         Self {
             feature_slug: state.feature.slug.clone(),
+            phase_names,
             host: "127.0.0.1".to_string(),
             port: 3456,
         }
@@ -244,6 +250,7 @@ impl WebRunApp {
         let state = Arc::new(RunState {
             run_rx: Arc::new(Mutex::new(rx)),
             shutdown_tx: shutdown_tx.clone(),
+            phase_names: self.phase_names,
         });
 
         let app = Router::new()
@@ -293,6 +300,21 @@ async fn ws_run_upgrade(
 async fn handle_run_ws(mut socket: WebSocket, state: Arc<RunState>) {
     debug!("run WebSocket connected");
 
+    // Send initial phases list so the sidebar can show all phases upfront
+    if !state.phase_names.is_empty()
+        && send_ws_json(
+            &mut socket,
+            &RunServerMessage::PhasesList {
+                names: state.phase_names.clone(),
+            },
+        )
+        .await
+        .is_err()
+    {
+        let _ = state.shutdown_tx.send(false);
+        return;
+    }
+
     let mut run_rx = state.run_rx.lock().await;
 
     loop {
@@ -338,7 +360,7 @@ async fn handle_run_ws(mut socket: WebSocket, state: Arc<RunState>) {
                     }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => {
-                        warn!(error = %e, "run WebSocket error");
+                        debug!(error = %e, "run WebSocket closed (expected on cancel/shutdown)");
                         break;
                     }
                 }

@@ -111,6 +111,12 @@ var progress = 0;
     var msg = JSON.parse(evt.data);
     switch (msg.type) {
       case "ready": setActivity("Ready"); break;
+      case "phasesList":
+        for (var i = 0; i < msg.names.length; i++) {
+          phases.push({ name: msg.names[i], status: "pending" });
+        }
+        renderPhases();
+        break;
       case "text": appendOutput(msg.content); break;
       case "phaseStarted":
         currentPhase = msg.index;
@@ -189,7 +195,10 @@ var progress = 0;
 
 // --- Actions ---
 function cancel() {
-  if (ws) ws.send(JSON.stringify({ type: "cancel" }));
+  if (ws) {
+    ws.send(JSON.stringify({ type: "cancel" }));
+    ws.close();
+  }
   document.getElementById("cancelledOverlay").classList.add("visible");
 }
 

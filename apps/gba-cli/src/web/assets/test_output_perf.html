@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Output Performance Test</title>
+<style>
+  body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+  .section { margin: 20px 0; padding: 16px; background: #16213e; border-radius: 8px; }
+  button { background: #e94560; color: #fff; border: none; padding: 8px 20px; border-radius: 4px; cursor: pointer; font-size: 14px; margin: 4px; }
+  button:disabled { background: #555; cursor: not-allowed; }
+  #output-direct { width: 100%; height: 200px; overflow-y: auto; background: #0f0f1a; padding: 8px; font-size: 13px; white-space: pre-wrap; word-wrap: break-word; }
+  #output-raf { width: 100%; height: 200px; overflow-y: auto; background: #0f0f1a; padding: 8px; font-size: 13px; white-space: pre-wrap; word-wrap: break-word; }
+  .result { color: #4caf50; font-weight: bold; }
+  table { border-collapse: collapse; margin-top: 12px; }
+  th, td { border: 1px solid #0f3460; padding: 6px 12px; text-align: left; }
+  th { background: #0f3460; }
+  .slow { color: #f44336; }
+  .fast { color: #4caf50; }
+</style>
+</head>
+<body>
+
+<h1>Output Performance Test</h1>
+<p>Simulates rapid agent text output to measure DOM update performance.</p>
+
+<div class="section">
+  <h2>Approach 1: Direct append (current implementation)</h2>
+  <p><code>el.textContent += text</code> — triggers full DOM reflow on every message.</p>
+  <button id="btnDirect" onclick="runDirect()">Run Test (5,000 chunks)</button>
+  <span id="statusDirect"></span>
+  <div id="output-direct"></div>
+</div>
+
+<div class="section">
+  <h2>Approach 2: requestAnimationFrame batching</h2>
+  <p>Buffer messages in JS, flush to DOM once per animation frame (~60fps).</p>
+  <button id="btnRaf" onclick="runRaf()">Run Test (5,000 chunks)</button>
+  <span id="statusRaf"></span>
+  <div id="output-raf"></div>
+</div>
+
+<div class="section">
+  <h2>Results</h2>
+  <table>
+    <thead>
+      <tr><th>Metric</th><th>Direct append</th><th>RAF batched</th></tr>
+    </thead>
+    <tbody id="results">
+      <tr><td colspan="3" style="color:#666">Run both tests to see results</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Control</h2>
+  <button onclick="resetAll()">Reset All</button>
+</div>
+
+<script>
+// --- Config ---
+var TOTAL_CHUNKS = 5000;
+var CHUNK_SIZE = 50;       // chars per chunk (simulates streaming token output)
+var CHUNK_INTERVAL = 2;    // ms between chunks (simulates rapid agent output)
+
+// --- Generate realistic text chunks ---
+var sampleTexts = [
+  "```\nfn main() {\n    println!(\"Hello, world!\");\n}\n```\n",
+  "I'll now implement the HTTP handler for the /api/v1/users endpoint.\n",
+  "The error occurs because the type mismatch between String and &str.\n",
+  "Let me check the Cargo.toml for the correct dependency version.\n",
+  "[INFO] Compiling gba-core v0.2.3\n[INFO] Compiling gba-cli v0.2.3\n",
+  "The phase is now complete. Moving on to the next step.\n",
+  "I need to update the config.yml to reflect the new settings.\n",
+  "The test should pass after this fix. Let me verify.\n",
+  "Here's the updated implementation with proper error handling:\n",
+  "Checking the state.yml for the current phase status...\n",
+];
+
+function randomChunk() {
+  return sampleTexts[Math.floor(Math.random() * sampleTexts.length)];
+}
+
+// --- Test 1: Direct append (current approach) ---
+var directTime = null;
+var directEl = null;
+var directDone = false;
+
+async function runDirect() {
+  var btn = document.getElementById("btnDirect");
+  btn.disabled = true;
+  var status = document.getElementById("statusDirect");
+  status.textContent = "Running...";
+
+  directEl = document.getElementById("output-direct");
+  directEl.textContent = "";
+
+  // Measure: use performance.now() for sub-ms precision
+  var startTime = performance.now();
+  var chunkCount = 0;
+
+  for (var i = 0; i < TOTAL_CHUNKS; i++) {
+    directEl.textContent += randomChunk();
+    chunkCount++;
+
+    // Simulate network pacing (yield to event loop every chunk)
+    if (i % 100 === 0) {
+      await new Promise(function(r) { setTimeout(r, 0); });
+    }
+  }
+
+  directTime = performance.now() - startTime;
+  directDone = true;
+  btn.disabled = false;
+  status.innerHTML = '<span class="result">Done in ' + directTime.toFixed(1) + 'ms (' + chunkCount + ' chunks)</span>';
+  updateResults();
+}
+
+// --- Test 2: RAF batching ---
+var rafTime = null;
+var rafDone = false;
+
+async function runRaf() {
+  var btn = document.getElementById("btnRaf");
+  btn.disabled = true;
+  var status = document.getElementById("statusRaf");
+  status.textContent = "Running...";
+
+  var rafEl = document.getElementById("output-raf");
+  rafEl.textContent = "";
+
+  // Buffer implementation
+  var buffer = "";
+  var pendingFlush = false;
+
+  function flush() {
+    pendingFlush = false;
+    if (buffer.length > 0) {
+      rafEl.textContent += buffer;
+      buffer = "";
+    }
+  }
+
+  function appendChunk(text) {
+    buffer += text;
+    if (!pendingFlush) {
+      pendingFlush = true;
+      requestAnimationFrame(flush);
+    }
+  }
+
+  var startTime = performance.now();
+  var chunkCount = 0;
+
+  for (var i = 0; i < TOTAL_CHUNKS; i++) {
+    appendChunk(randomChunk());
+    chunkCount++;
+
+    if (i % 100 === 0) {
+      await new Promise(function(r) { setTimeout(r, 0); });
+    }
+  }
+
+  // Wait for last RAF to flush
+  await new Promise(function(r) { requestAnimationFrame(r); });
+
+  rafTime = performance.now() - startTime;
+  rafDone = true;
+  btn.disabled = false;
+  status.innerHTML = '<span class="result">Done in ' + rafTime.toFixed(1) + 'ms (' + chunkCount + ' chunks)</span>';
+  updateResults();
+}
+
+// --- Results comparison ---
+function updateResults() {
+  if (!directDone || !rafDone) return;
+
+  var speedup = (directTime / rafTime).toFixed(1);
+  var directClass = directTime > rafTime ? "slow" : "fast";
+  var rafClass = rafTime < directTime ? "fast" : "slow";
+  var verdict = parseFloat(speedup) > 1
+    ? '<span class="fast">RAF is ' + speedup + 'x faster</span>'
+    : '<span class="slow">RAF is ' + speedup + 'x slower — no improvement</span>';
+
+  document.getElementById("results").innerHTML =
+    '<tr>' +
+      '<td>Total time</td>' +
+      '<td class="' + directClass + '">' + directTime.toFixed(1) + 'ms</td>' +
+      '<td class="' + rafClass + '">' + rafTime.toFixed(1) + 'ms</td>' +
+    '</tr>' +
+    '<tr>' +
+      '<td>Final output size</td>' +
+      '<td>' + (directEl ? directEl.textContent.length : 0).toLocaleString() + ' chars</td>' +
+      '<td>' + document.getElementById("output-raf").textContent.length.toLocaleString() + ' chars</td>' +
+    '</tr>' +
+    '<tr>' +
+      '<td>Speedup</td>' +
+      '<td colspan="2">' + verdict + '</td>' +
+    '</tr>';
+}
+
+function resetAll() {
+  directDone = false;
+  rafDone = false;
+  directTime = null;
+  rafTime = null;
+  document.getElementById("output-direct").textContent = "";
+  document.getElementById("output-raf").textContent = "";
+  document.getElementById("statusDirect").textContent = "";
+  document.getElementById("statusRaf").textContent = "";
+  document.getElementById("results").innerHTML =
+    '<tr><td colspan="3" style="color:#666">Run both tests to see results</td></tr>';
+}
+</script>
+</body>
+</html>
