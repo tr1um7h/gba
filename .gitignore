@@ -3,3 +3,4 @@ Cargo.lock
 .vscode
 .trees
 .gba/logs
+dirty-file.txt

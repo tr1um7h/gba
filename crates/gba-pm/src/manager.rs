@@ -1,7 +1,7 @@
 //! Prompt manager for loading and rendering Jinja templates.
 //!
 //! This module provides the [`PromptManager`] struct for managing prompt templates
-//! using the MiniJinja template engine.
+//! using the `MiniJinja` template engine.
 //!
 //! # Example
 //!
@@ -33,12 +33,12 @@ const TEMPLATE_EXTENSIONS: &[&str] = &["j2", "jinja", "jinja2"];
 
 /// Prompt manager for loading and rendering Jinja templates.
 ///
-/// The manager uses MiniJinja as the template engine and supports loading
+/// The manager uses `MiniJinja` as the template engine and supports loading
 /// templates from directories or adding them programmatically.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct PromptManager<'a> {
-    /// The MiniJinja environment containing all templates.
+    /// The `MiniJinja` environment containing all templates.
     env: Environment<'a>,
 }
 
@@ -48,7 +48,7 @@ impl Default for PromptManager<'_> {
     }
 }
 
-impl<'a> PromptManager<'a> {
+impl PromptManager<'_> {
     /// Create a new prompt manager with an empty template environment.
     ///
     /// # Example

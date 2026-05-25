@@ -1,7 +1,7 @@
 //! Plan command implementation.
 //!
 //! This module implements the `gba plan` command which opens an interactive
-//! TUI session to plan a new feature through conversation with Claude.
+//! browser-based session to plan a new feature through conversation with Claude.
 
 use std::path::Path;
 
@@ -15,8 +15,8 @@ use crate::state::{
     FeatureInfo, FeatureResult, FeatureState, FeatureStatus, GitState, PhaseState, PhaseStatus,
     TaskStats,
 };
-use crate::tui::App;
 use crate::utils;
+use crate::web::WebPlanApp;
 
 /// Run the plan command.
 ///
@@ -26,7 +26,7 @@ use crate::utils;
 /// 3. Generates a new feature ID (if new)
 /// 4. Creates git worktree and spec directories
 /// 5. Creates the Engine with prompts loaded
-/// 6. Launches the TUI application
+/// 6. Launches the Web UI application
 /// 7. On completion, generates state.yml if specs exist
 ///
 /// # Arguments
@@ -41,7 +41,7 @@ use crate::utils;
 /// - GBA is not initialized
 /// - Feature is already completed
 /// - Git worktree creation fails
-/// - TUI cannot be launched
+/// - Web UI cannot be launched
 pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> {
     info!(slug = slug, workdir = %workdir.display(), "starting plan command");
 
@@ -87,8 +87,8 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     // Create the engine (context is the worktree, not main repo)
     let engine = utils::create_engine_with_context(workdir, &worktree_path)?;
 
-    // Launch TUI
-    let mut app = App::new(
+    // Launch Web UI
+    let app = WebPlanApp::new(
         slug.to_string(),
         feature_id.clone(),
         base_branch.clone(),
@@ -106,8 +106,8 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
     println!("Type /done when planning is complete.");
     println!();
 
-    // Run the TUI
-    app.run(&engine).await.context("TUI error")?;
+    // Run the Web UI
+    app.run(&engine).await.context("Web UI error")?;
 
     // Check if specs were created and approved
     let specs_dir = utils::feature_specs_dir(workdir, slug);
@@ -118,12 +118,16 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
         // Generate state.yml
         let state = generate_state(workdir, slug, &feature_id, &base_branch)?;
 
+        // Get the design document path
+        let design_path = specs_dir.join("design.md");
+
         println!();
         println!("Planning completed!");
         println!("Feature ID: {}", state.feature.id);
         println!("Feature slug: {}", state.feature.slug);
         println!("Worktree: {}", state.git.worktree_path);
         println!("Branch: {}", state.git.branch);
+        println!("Design document: {}", design_path.display());
         println!();
         println!("Run `gba run {}` to execute the implementation.", slug);
     } else {
@@ -142,7 +146,7 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
 ///
 /// Returns an error if:
 /// - Feature is already completed (should use `gba status`)
-/// - Feature is already planned and ready (should use `gba run`)
+/// - Feature is currently running (should wait for completion)
 /// - Cannot determine branch name from worktree
 fn handle_existing_worktree(
     workdir: &Path,
@@ -174,6 +178,7 @@ fn handle_existing_worktree(
         let state = FeatureState::load(&feature_dir)?;
 
         match state.status {
+            // Block: Completed status - feature is done
             FeatureStatus::Completed => {
                 println!("Feature '{}' is already completed.", slug);
                 if let Some(ref url) = state.result.pr_url {
@@ -181,38 +186,43 @@ fn handle_existing_worktree(
                 }
                 return Err(CliError::FeatureExists(slug.to_string()));
             }
-            FeatureStatus::InProgress | FeatureStatus::Failed => {
-                println!(
-                    "Feature '{}' is already planned and ready for execution.",
-                    slug
-                );
+            // Block: InProgress status - feature is currently running
+            FeatureStatus::InProgress => {
+                println!("Feature '{}' is currently being executed.", slug);
                 println!();
-                println!("To execute: gba run {}", slug);
-                println!(
-                    "To replan:  gba plan {} --restart (not yet implemented)",
-                    slug
-                );
+                println!("Current status: {}", state.status);
+                println!();
+                println!("Please wait for the current execution to complete, or use:");
+                println!("  gba status {}  # to check current status", slug);
                 return Err(CliError::FeatureExists(slug.to_string()));
             }
-            FeatureStatus::Planned => {
-                // Check if specs exist
-                let specs_dir = utils::feature_specs_dir(workdir, slug);
-                let design_exists = specs_dir.join("design.md").exists();
-                let verification_exists = specs_dir.join("verification.md").exists();
+            // Allow: Planning, Planned, Failed - can enter plan
+            FeatureStatus::Planning | FeatureStatus::Planned | FeatureStatus::Failed => {
+                // Check if specs exist for Planned status
+                if state.status == FeatureStatus::Planned {
+                    let specs_dir = utils::feature_specs_dir(workdir, slug);
+                    let design_exists = specs_dir.join("design.md").exists();
+                    let verification_exists = specs_dir.join("verification.md").exists();
 
-                if design_exists && verification_exists {
-                    println!(
-                        "Feature '{}' is already planned and ready for execution.",
-                        slug
-                    );
-                    println!();
-                    println!("To execute: gba run {}", slug);
-                    return Err(CliError::FeatureExists(slug.to_string()));
+                    if design_exists && verification_exists {
+                        println!(
+                            "Feature '{}' is already planned and ready for execution.",
+                            slug
+                        );
+                        println!();
+                        println!("To execute: gba run {}", slug);
+                        return Err(CliError::FeatureExists(slug.to_string()));
+                    }
                 }
 
-                // Incomplete planning - can resume
+                // Allow entering plan for: Planning, Failed, or incomplete Planned
+                let status_msg = match state.status {
+                    FeatureStatus::Planning => "Planning is in progress",
+                    FeatureStatus::Failed => "Previous execution failed",
+                    _ => "Planning was not completed",
+                };
                 println!("Found existing worktree for feature '{}'.", slug);
-                println!("Planning was not completed. Resuming...");
+                println!("{}. Resuming...", status_msg);
                 println!();
             }
         }

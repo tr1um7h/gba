@@ -45,7 +45,7 @@ pub enum Command {
 
     /// Plan a new feature interactively.
     ///
-    /// Opens an interactive TUI session to discuss and plan a new feature.
+    /// Opens an interactive browser-based session to discuss and plan a new feature.
     /// Generates design specs and creates a git worktree for implementation.
     Plan {
         /// Feature slug (e.g., "add-user-auth").
@@ -92,6 +92,20 @@ pub enum Command {
     Status {
         /// Feature slug to show status for.
         slug: String,
+    },
+
+    /// Remove a feature and clean up all resources.
+    ///
+    /// Removes the feature's worktree, branch, specs, and state.
+    /// Prompts for confirmation if the feature is in-progress or has
+    /// uncommitted changes, unless `--force` is used.
+    Remove {
+        /// Feature slug to remove.
+        slug: String,
+
+        /// Skip confirmation prompts.
+        #[arg(long, short)]
+        force: bool,
     },
 
     /// Clean up worktrees for closed/merged PRs.
@@ -202,5 +216,37 @@ mod tests {
             }
             _ => panic!("expected Clean command"),
         }
+    }
+
+    #[test]
+    fn test_should_parse_remove_command() {
+        let cli =
+            Cli::try_parse_from(["gba", "remove", "my-feature"]).expect("should parse remove");
+        match cli.command {
+            Command::Remove { slug, force } => {
+                assert_eq!(slug, "my-feature");
+                assert!(!force);
+            }
+            _ => panic!("expected Remove command"),
+        }
+    }
+
+    #[test]
+    fn test_should_parse_remove_command_with_force() {
+        let cli = Cli::try_parse_from(["gba", "remove", "my-feature", "--force"])
+            .expect("should parse remove with force");
+        match cli.command {
+            Command::Remove { slug, force } => {
+                assert_eq!(slug, "my-feature");
+                assert!(force);
+            }
+            _ => panic!("expected Remove command"),
+        }
+    }
+
+    #[test]
+    fn test_should_reject_remove_without_slug() {
+        let result = Cli::try_parse_from(["gba", "remove"]);
+        assert!(result.is_err());
     }
 }

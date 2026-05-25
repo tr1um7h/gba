@@ -19,8 +19,8 @@ mod commands;
 mod config;
 mod error;
 mod state;
-pub mod tui;
 pub mod utils;
+pub mod web;
 
 use cli::{Cli, Command};
 
@@ -80,6 +80,9 @@ async fn run_command(command: Command, workdir: &Path, verbose: bool) -> Result<
         }
         Command::Clean { dry_run, force } => {
             commands::run_clean(workdir, dry_run, force).await?;
+        }
+        Command::Remove { slug, force } => {
+            commands::run_remove(workdir, &slug, force).await?;
         }
     }
 

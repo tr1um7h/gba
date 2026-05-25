@@ -1,0 +1,59 @@
+feature:
+  id: '0003'
+  slug: command-remove
+  createdAt: 2026-05-25T07:37:51.822766Z
+  updatedAt: 2026-05-25T10:17:56.091549Z
+status: completed
+currentPhase: 2
+git:
+  worktreePath: .trees/command-remove
+  branch: feature/0003-command-remove
+  baseBranch: master
+phases:
+- name: add-remove-command
+  status: completed
+  startedAt: 2026-05-25T08:19:20.764945Z
+  completedAt: 2026-05-25T08:23:29.156069Z
+  commitSha: b73d186
+  stats:
+    turns: 31
+    inputTokens: 1066468
+    outputTokens: 3762
+    costUsd: 5.42639
+- name: implement-remove-handler
+  status: completed
+  startedAt: 2026-05-25T09:01:44.700510Z
+  completedAt: 2026-05-25T09:03:36.605795Z
+  commitSha: bbde204
+  stats:
+    turns: 16
+    inputTokens: 41551
+    outputTokens: 1340
+    costUsd: 0.36087100000000005
+- name: add-unit-tests
+  status: completed
+  startedAt: 2026-05-25T10:07:39.779249Z
+  completedAt: 2026-05-25T10:11:21.551160Z
+  commitSha: dce6f0f
+  stats:
+    turns: 22
+    inputTokens: 497489
+    outputTokens: 3907
+    costUsd: 1.551072
+totalStats:
+  turns: 135
+  inputTokens: 1721261
+  outputTokens: 20012
+  costUsd: 9.679533
+result:
+  prUrl: https://github.com/tr1um7h/gba/pull/1
+  prNumber: 1
+  merged: false
+  review:
+    status: passed
+    iterations: 1
+    completedAt: 2026-05-25T10:14:18.935927Z
+  verification:
+    status: passed
+    iterations: 1
+    completedAt: 2026-05-25T10:17:02.076173Z

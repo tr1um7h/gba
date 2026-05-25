@@ -1,6 +1,9 @@
 agent:
   permissionMode: auto
+  rounds: 1
 git:
   autoCommit: true
+  autoPush: true
+  autoPr: false
 review:
   enabled: true

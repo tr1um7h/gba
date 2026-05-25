@@ -1,0 +1,67 @@
+feature:
+  id: '0002'
+  slug: improve-usage
+  createdAt: 2026-05-25T02:02:57.074234Z
+  updatedAt: 2026-05-25T05:36:01.158281Z
+status: completed
+currentPhase: 3
+git:
+  worktreePath: .trees/improve-usage
+  branch: feature/0002-improve-usage
+  baseBranch: master
+phases:
+- name: state-check
+  status: completed
+  startedAt: 2026-05-25T02:12:50.140511Z
+  completedAt: 2026-05-25T02:17:36.172298Z
+  commitSha: 861a5f7
+  stats:
+    turns: 37
+    inputTokens: 1358580
+    outputTokens: 9008
+    costUsd: 7.018099999999999
+- name: completion-output
+  status: completed
+  startedAt: 2026-05-25T02:17:36.172613Z
+  completedAt: 2026-05-25T02:21:49.158546Z
+  commitSha: f1794e0
+  stats:
+    turns: 34
+    inputTokens: 1343956
+    outputTokens: 6258
+    costUsd: 6.87623
+- name: agent-config
+  status: completed
+  startedAt: 2026-05-25T02:21:49.158863Z
+  completedAt: 2026-05-25T02:24:44.724139Z
+  commitSha: 209541c
+  stats:
+    turns: 24
+    inputTokens: 867528
+    outputTokens: 4761
+    costUsd: 4.456665
+- name: rounds-integration
+  status: completed
+  startedAt: 2026-05-25T05:27:17.560446Z
+  completedAt: 2026-05-25T05:36:01.158279Z
+  commitSha: 9b888fd
+  stats:
+    turns: 75
+    inputTokens: 3608026
+    outputTokens: 14148
+    costUsd: 18.393830000000005
+totalStats:
+  turns: 170
+  inputTokens: 7178090
+  outputTokens: 34175
+  costUsd: 36.744825000000006
+result:
+  merged: true
+  review:
+    status: passed
+    iterations: 1
+    completedAt: 2026-05-25T05:37:12.710893Z
+  verification:
+    status: passed
+    iterations: 1
+    completedAt: 2026-05-25T05:38:51.293563Z

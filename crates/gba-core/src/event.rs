@@ -84,6 +84,20 @@ pub trait EventHandler: Send {
 
     /// Called when the response is complete.
     fn on_complete(&mut self) {}
+
+    /// Called when the response is complete with accumulated session statistics.
+    ///
+    /// Override this to receive turn/token/cost data at completion time.
+    /// Default implementation delegates to [`on_complete`](Self::on_complete).
+    fn on_complete_with_stats(
+        &mut self,
+        _turns: u32,
+        _cost_usd: f64,
+        _input_tokens: u64,
+        _output_tokens: u64,
+    ) {
+        self.on_complete();
+    }
 }
 
 /// Simple event handler that prints to stdout.

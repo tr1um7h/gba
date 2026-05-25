@@ -26,6 +26,26 @@ const fn default_auto_commit() -> bool {
     true
 }
 
+/// Default value for auto_pr setting.
+const fn default_auto_pr() -> bool {
+    true
+}
+
+/// Default web port.
+const fn default_web_port() -> u16 {
+    3456
+}
+
+/// Default web host.
+fn default_web_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+/// Default value for auto_push setting.
+const fn default_auto_push() -> bool {
+    false
+}
+
 /// Default branch pattern for feature branches.
 fn default_branch_pattern() -> String {
     "feature/{id}-{slug}".to_string()
@@ -36,9 +56,36 @@ const fn default_review_enabled() -> bool {
     true
 }
 
+/// Default value for agent rounds.
+const fn default_rounds() -> u32 {
+    3
+}
+
 /// Default review provider.
 fn default_review_provider() -> String {
     "codex".to_string()
+}
+
+/// Web UI configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebConfig {
+    /// Port for the web UI server.
+    #[serde(default = "default_web_port")]
+    pub port: u16,
+
+    /// Host address for the web UI server.
+    #[serde(default = "default_web_host")]
+    pub host: String,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            port: default_web_port(),
+            host: default_web_host(),
+        }
+    }
 }
 
 /// GBA project configuration.
@@ -57,6 +104,9 @@ fn default_review_provider() -> String {
 /// review:
 ///   enabled: true
 ///   provider: codex
+/// web:
+///   port: 3456
+///   host: "127.0.0.1"
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +126,10 @@ pub struct GbaConfig {
     /// Review configuration.
     #[serde(default)]
     pub review: ReviewConfig,
+
+    /// Web UI configuration.
+    #[serde(default)]
+    pub web: WebConfig,
 }
 
 impl GbaConfig {
@@ -153,6 +207,10 @@ pub struct AgentConfig {
     /// Budget limit in USD (optional).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_limit: Option<f64>,
+
+    /// Maximum rounds for verification/review iterations.
+    #[serde(default = "default_rounds")]
+    pub rounds: u32,
 }
 
 impl Default for AgentConfig {
@@ -161,6 +219,7 @@ impl Default for AgentConfig {
             model: None,
             permission_mode: default_permission_mode(),
             budget_limit: None,
+            rounds: default_rounds(),
         }
     }
 }
@@ -182,6 +241,14 @@ pub struct GitConfig {
     #[serde(default = "default_auto_commit")]
     pub auto_commit: bool,
 
+    /// Whether to auto-create PR after completing all phases.
+    #[serde(default = "default_auto_pr")]
+    pub auto_pr: bool,
+
+    /// Whether to auto-push to remote after state updates.
+    #[serde(default = "default_auto_push")]
+    pub auto_push: bool,
+
     /// Branch naming pattern.
     ///
     /// Available variables: `{id}`, `{slug}`
@@ -193,6 +260,8 @@ impl Default for GitConfig {
     fn default() -> Self {
         Self {
             auto_commit: default_auto_commit(),
+            auto_pr: default_auto_pr(),
+            auto_push: default_auto_push(),
             branch_pattern: default_branch_pattern(),
         }
     }
@@ -230,6 +299,7 @@ mod tests {
         let config: GbaConfig = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(config.agent.permission_mode, "auto");
+        assert_eq!(config.agent.rounds, 3);
         assert!(config.git.auto_commit);
         assert!(config.review.enabled);
     }
@@ -241,11 +311,14 @@ agent:
   model: claude-sonnet-4-20250514
   permissionMode: manual
   budgetLimit: 10.0
+  rounds: 5
 prompts:
   include:
     - ~/.config/gba/prompts
 git:
   autoCommit: false
+  autoPr: false
+  autoPush: true
   branchPattern: "feat/{id}/{slug}"
 review:
   enabled: false
@@ -259,8 +332,11 @@ review:
         );
         assert_eq!(config.agent.permission_mode, "manual");
         assert_eq!(config.agent.budget_limit, Some(10.0));
+        assert_eq!(config.agent.rounds, 5);
         assert_eq!(config.prompts.include, vec!["~/.config/gba/prompts"]);
         assert!(!config.git.auto_commit);
+        assert!(!config.git.auto_pr);
+        assert!(config.git.auto_push);
         assert_eq!(config.git.branch_pattern, "feat/{id}/{slug}");
         assert!(!config.review.enabled);
         assert_eq!(config.review.provider, "claude");
@@ -273,6 +349,8 @@ review:
 
         assert!(yaml.contains("permissionMode: auto"));
         assert!(yaml.contains("autoCommit: true"));
+        assert!(yaml.contains("autoPr: true"));
+        assert!(yaml.contains("autoPush: false"));
     }
 
     #[test]
@@ -282,8 +360,11 @@ review:
         assert_eq!(config.agent.permission_mode, "auto");
         assert!(config.agent.model.is_none());
         assert!(config.agent.budget_limit.is_none());
+        assert_eq!(config.agent.rounds, 3);
         assert!(config.prompts.include.is_empty());
         assert!(config.git.auto_commit);
+        assert!(config.git.auto_pr);
+        assert!(!config.git.auto_push);
         assert_eq!(config.git.branch_pattern, "feature/{id}-{slug}");
         assert!(config.review.enabled);
         assert_eq!(config.review.provider, "codex");

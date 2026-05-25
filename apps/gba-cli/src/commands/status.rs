@@ -40,6 +40,7 @@ pub async fn run_status(workdir: &Path, slug: &str) -> Result<()> {
 
     // Status
     let status_icon = match state.status {
+        crate::state::FeatureStatus::Planning => "[*]",
         crate::state::FeatureStatus::Planned => "[.]",
         crate::state::FeatureStatus::InProgress => "[>]",
         crate::state::FeatureStatus::Completed => "[+]",
