@@ -2,8 +2,8 @@ feature:
   id: '0003'
   slug: command-remove
   createdAt: 2026-05-25T07:37:51.822766Z
-  updatedAt: 2026-05-25T10:11:21.551162Z
-status: inProgress
+  updatedAt: 2026-05-25T10:17:56.091549Z
+status: completed
 currentPhase: 2
 git:
   worktreePath: .trees/command-remove
@@ -46,6 +46,8 @@ totalStats:
   outputTokens: 20012
   costUsd: 9.679533
 result:
+  prUrl: https://github.com/tr1um7h/gba/pull/1
+  prNumber: 1
   merged: false
   review:
     status: passed
