@@ -54,6 +54,8 @@ struct SessionStats {
 enum WorkerEvent {
     /// Streaming text chunk from Claude.
     Text(String),
+    /// Activity status update (e.g. tool usage).
+    Status(String),
     /// Response complete with stats.
     Complete(SessionStats),
     /// Error occurred.
@@ -270,6 +272,12 @@ async fn handle_plan_ws(mut socket: WebSocket, state: Arc<PlanState>) {
                             break;
                         }
                     }
+                    Some(WorkerEvent::Status(activity)) => {
+                        let msg = PlanServerMessage::StatusUpdate { activity };
+                        if send_ws_json(&mut socket, &msg).await.is_err() {
+                            break;
+                        }
+                    }
                     Some(WorkerEvent::Complete(stats)) => {
                         let msg = PlanServerMessage::Complete {
                             turns: stats.turns,
@@ -410,8 +418,9 @@ impl gba_core::event::EventHandler for PlanEventHandler {
         let _ = self.tx.try_send(WorkerEvent::Text(text));
     }
 
-    fn on_tool_use(&mut self, tool: &str, _input: &serde_json::Value) {
-        debug!(tool = tool, "tool use in plan session");
+    fn on_tool_use(&mut self, tool: &str, input: &serde_json::Value) {
+        let activity = format_tool_activity(tool, input);
+        let _ = self.tx.try_send(WorkerEvent::Status(activity));
     }
 
     fn on_tool_result(&mut self, _result: &str) {
@@ -439,5 +448,56 @@ impl gba_core::event::EventHandler for PlanEventHandler {
             output_tokens,
             cost_usd,
         }));
+    }
+}
+
+/// Build a human-readable activity description from a tool-use event.
+fn format_tool_activity(tool: &str, input: &serde_json::Value) -> String {
+    match tool {
+        "Read" | "read_file" => {
+            let path = input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            format!("Reading {path}")
+        }
+        "Write" | "write_file" => {
+            let path = input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            format!("Writing {path}")
+        }
+        "Edit" | "edit_file" => {
+            let path = input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            format!("Editing {path}")
+        }
+        "Bash" | "bash" => {
+            let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let display = if cmd.len() > 60 {
+                format!("{}...", &cmd[..57])
+            } else {
+                cmd.to_string()
+            };
+            format!("Running: {display}")
+        }
+        "Glob" | "glob" => {
+            let pattern = input
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            format!("Searching: {pattern}")
+        }
+        "Grep" | "grep" => {
+            let pattern = input
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            format!("Searching for: {pattern}")
+        }
+        other => format!("Using tool: {other}"),
     }
 }

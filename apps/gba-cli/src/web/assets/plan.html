@@ -28,7 +28,10 @@
   .msg a { color: #e94560; text-decoration: underline; }
 
   /* Streaming indicator */
-  .streaming::after { content: "..."; animation: blink 1s step-end infinite; }
+  .streaming::after { content: ""; animation: none; }
+  .streaming .status { color: #a0a0a0; font-size: 12px; font-style: italic; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid #2a2a4a; }
+  .streaming .elapsed { color: #e94560; font-size: 11px; margin-right: 8px; }
+  .streaming .activity { color: #7a7a9a; }
   @keyframes blink { 50% { opacity: 0; } }
 
   /* Input area */
@@ -72,6 +75,10 @@
 let ws = null;
 let waiting = false;
 let streamingEl = null;
+let elapsedTimer = null;
+let elapsedStart = null;
+let statusEl = null;
+let activityEl = null;
 
 // --- Init ---
 (function init() {
@@ -92,6 +99,9 @@ let streamingEl = null;
           break;
         case "text":
           appendStream(msg.content);
+          break;
+        case "statusUpdate":
+          updateActivity(msg.activity);
           break;
         case "complete":
           finalizeStream();
@@ -190,23 +200,78 @@ function startStream() {
   waiting = true;
   streamingEl = document.createElement("div");
   streamingEl.className = "msg assistant streaming";
-  streamingEl.textContent = "";
+
+  // Status container (elapsed timer + activity)
+  statusEl = document.createElement("div");
+  statusEl.className = "status";
+
+  elapsedStart = Date.now();
+  var elapsedEl = document.createElement("span");
+  elapsedEl.className = "elapsed";
+  elapsedEl.textContent = "0s";
+  statusEl.appendChild(elapsedEl);
+
+  activityEl = document.createElement("span");
+  activityEl.className = "activity";
+  activityEl.textContent = "Thinking...";
+  statusEl.appendChild(activityEl);
+
+  elapsedTimer = setInterval(function() {
+    var s = Math.floor((Date.now() - elapsedStart) / 1000);
+    elapsedEl.textContent = formatElapsed(s);
+  }, 1000);
+
+  streamingEl.appendChild(statusEl);
   document.getElementById("chat").appendChild(streamingEl);
   document.getElementById("chat").scrollTop = document.getElementById("chat").scrollHeight;
 }
 
+function formatElapsed(totalSec) {
+  if (totalSec < 60) return totalSec + "s";
+  var m = Math.floor(totalSec / 60);
+  var s = totalSec % 60;
+  if (m < 60) return m + "m " + s + "s";
+  var h = Math.floor(m / 60);
+  m = m % 60;
+  return h + "h " + m + "m " + s + "s";
+}
+
+function updateActivity(text) {
+  if (activityEl) activityEl.textContent = text;
+}
+
 function appendStream(text) {
   if (!streamingEl) startStream();
-  streamingEl.textContent += text;
+  // Stop and remove elapsed timer, keep activity visible
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+    elapsedStart = null;
+    var ee = statusEl ? statusEl.querySelector(".elapsed") : null;
+    if (ee) ee.remove();
+  }
+  // Append text as a text node (preserves child elements like statusEl)
+  streamingEl.appendChild(document.createTextNode(text));
   document.getElementById("chat").scrollTop = document.getElementById("chat").scrollHeight;
 }
 
 function finalizeStream() {
   waiting = false;
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+    elapsedStart = null;
+  }
   if (streamingEl) {
+    // Remove status container before markdown conversion
+    if (statusEl) { statusEl.remove(); statusEl = null; }
+    activityEl = null;
+
     streamingEl.classList.remove("streaming");
-    if (typeof marked !== "undefined") {
-      var raw = streamingEl.textContent;
+    var raw = streamingEl.textContent;
+    if (!raw.trim()) {
+      streamingEl.remove();
+    } else if (typeof marked !== "undefined") {
       try { streamingEl.innerHTML = marked.parse(raw); } catch(_) {}
     }
     streamingEl = null;

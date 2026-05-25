@@ -38,6 +38,8 @@ pub enum PlanServerMessage {
     },
     /// Session was cancelled.
     Cancelled,
+    /// Activity status update during processing (e.g. tool usage).
+    StatusUpdate { activity: String },
     /// An error occurred.
     Error { message: String },
 }
