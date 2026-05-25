@@ -56,6 +56,11 @@ const fn default_review_enabled() -> bool {
     true
 }
 
+/// Default value for agent rounds.
+const fn default_rounds() -> u32 {
+    3
+}
+
 /// Default review provider.
 fn default_review_provider() -> String {
     "codex".to_string()
@@ -202,6 +207,10 @@ pub struct AgentConfig {
     /// Budget limit in USD (optional).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_limit: Option<f64>,
+
+    /// Maximum rounds for verification/review iterations.
+    #[serde(default = "default_rounds")]
+    pub rounds: u32,
 }
 
 impl Default for AgentConfig {
@@ -210,6 +219,7 @@ impl Default for AgentConfig {
             model: None,
             permission_mode: default_permission_mode(),
             budget_limit: None,
+            rounds: default_rounds(),
         }
     }
 }
@@ -289,6 +299,7 @@ mod tests {
         let config: GbaConfig = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(config.agent.permission_mode, "auto");
+        assert_eq!(config.agent.rounds, 3);
         assert!(config.git.auto_commit);
         assert!(config.review.enabled);
     }
@@ -300,6 +311,7 @@ agent:
   model: claude-sonnet-4-20250514
   permissionMode: manual
   budgetLimit: 10.0
+  rounds: 5
 prompts:
   include:
     - ~/.config/gba/prompts
@@ -320,6 +332,7 @@ review:
         );
         assert_eq!(config.agent.permission_mode, "manual");
         assert_eq!(config.agent.budget_limit, Some(10.0));
+        assert_eq!(config.agent.rounds, 5);
         assert_eq!(config.prompts.include, vec!["~/.config/gba/prompts"]);
         assert!(!config.git.auto_commit);
         assert!(!config.git.auto_pr);
@@ -347,6 +360,7 @@ review:
         assert_eq!(config.agent.permission_mode, "auto");
         assert!(config.agent.model.is_none());
         assert!(config.agent.budget_limit.is_none());
+        assert_eq!(config.agent.rounds, 3);
         assert!(config.prompts.include.is_empty());
         assert!(config.git.auto_commit);
         assert!(config.git.auto_pr);
