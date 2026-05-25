@@ -33,17 +33,34 @@ pub async fn run_remove(workdir: &Path, slug: &str, force: bool) -> Result<()> {
         return Err(CliError::NotInitialized.into());
     }
 
-    // Load feature state
-    let state = utils::load_feature_state(workdir, slug)?;
-
     let worktree_path = utils::feature_worktree_path(workdir, slug);
-    let branch = &state.git.branch;
+
+    // Try to load feature state; fall back to stateless cleanup if worktree exists
+    let state = match utils::load_feature_state(workdir, slug) {
+        Ok(s) => Some(s),
+        Err(_) if worktree_path.exists() => {
+            warn!(
+                "feature '{}' has no state.yml, cleaning up worktree only",
+                slug
+            );
+            None
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     // Check if confirmation is needed
-    let needs_confirm = !force && needs_confirmation(&state.status, &worktree_path);
+    let needs_confirm = if let Some(ref s) = state {
+        !force && needs_confirmation(&s.status, &worktree_path)
+    } else {
+        // No state — only confirm if worktree is dirty
+        !force && is_worktree_dirty(&worktree_path)
+    };
 
     if needs_confirm {
-        print_confirmation_prompt(&state.status, &worktree_path, slug);
+        let status = state
+            .as_ref()
+            .map_or(&FeatureStatus::Planning, |s| &s.status);
+        print_confirmation_prompt(status, &worktree_path, slug);
         if !confirm_action("Are you sure you want to remove this feature? (y/N): ")? {
             println!("Aborted.");
             return Ok(());
@@ -55,13 +72,40 @@ pub async fn run_remove(workdir: &Path, slug: &str, force: bool) -> Result<()> {
     // Remove the worktree
     remove_worktree(workdir, &worktree_path, slug)?;
 
-    // Delete the branch
-    delete_branch(workdir, branch)?;
+    // Delete the branch — infer from slug if no state
+    let branch = state
+        .as_ref()
+        .map(|s| s.git.branch.clone())
+        .unwrap_or_else(|| infer_branch_name(slug));
+    delete_branch(workdir, &branch)?;
 
     println!("Feature '{slug}' removed successfully.");
     info!("feature '{}' removed (branch: {})", slug, branch);
 
     Ok(())
+}
+
+/// Infer a likely branch name from the slug.
+///
+/// Branches follow the convention `feature/NNNN-{slug}`.
+/// If multiple candidates exist, returns the first match.
+/// Falls back to `feature/*-{slug}` glob pattern via `git branch --list`.
+fn infer_branch_name(slug: &str) -> String {
+    let pattern = format!("feature/*-{slug}");
+    if let Ok(output) = Command::new("git")
+        .args(["branch", "--list", &pattern])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(line) = stdout.lines().next() {
+            let trimmed = line.trim().trim_start_matches("* ").trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    // Final fallback: guess the pattern
+    format!("feature/0000-{slug}")
 }
 
 /// Determine whether confirmation is required before removing.
@@ -454,6 +498,44 @@ mod tests {
         assert!(
             msg.contains("Feature not found") || msg.contains("not found"),
             "expected 'Feature not found' error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_remove_worktree_without_state() {
+        let temp_dir = create_test_repo_with_commit();
+
+        // Create .gba/config.yml to mark as initialized
+        let gba_dir = temp_dir.path().join(".gba");
+        fs::create_dir_all(&gba_dir).expect("failed to create .gba dir");
+        fs::write(
+            gba_dir.join("config.yml"),
+            "agent:\n  permission_mode: auto\n",
+        )
+        .expect("failed to write config");
+
+        // Create a worktree without state.yml (simulates interrupted planning)
+        let repo = GitRepo::new(temp_dir.path());
+        let worktree_path = temp_dir.path().join(".trees").join("orphan-feature");
+        let branch = "feature/0001-orphan-feature";
+        repo.create_worktree(&worktree_path, branch)
+            .expect("failed to create worktree");
+        assert!(worktree_path.exists());
+
+        // Should succeed — stateless cleanup path
+        run_remove(temp_dir.path(), "orphan-feature", true)
+            .await
+            .expect("should remove worktree without state");
+        assert!(!worktree_path.exists(), "worktree should be removed");
+    }
+
+    #[test]
+    fn test_infer_branch_name_falls_back_to_guess() {
+        // No matching branch exists — should return the fallback pattern
+        let result = infer_branch_name("nonexistent-slug-xyz");
+        assert!(
+            result.contains("nonexistent-slug-xyz"),
+            "fallback should contain slug, got: {result}"
         );
     }
 }
