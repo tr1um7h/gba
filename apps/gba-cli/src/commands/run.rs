@@ -1012,6 +1012,13 @@ fn prepare_execution(
             // Reset for restart
             reset_state_for_restart(&mut state);
         }
+        FeatureStatus::Planning => {
+            println!("Feature '{}' is still in planning phase.", slug);
+            println!();
+            println!("Please complete the planning first:");
+            println!("  gba plan {}", slug);
+            return Ok(None);
+        }
         FeatureStatus::Planned | FeatureStatus::InProgress => {
             // Continue execution
         }

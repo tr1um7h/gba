@@ -145,6 +145,8 @@ pub struct FeatureInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FeatureStatus {
+    /// Feature is currently being planned (planning in progress).
+    Planning,
     /// Feature is planned but not started.
     Planned,
     /// Feature is currently being executed.
@@ -158,6 +160,7 @@ pub enum FeatureStatus {
 impl std::fmt::Display for FeatureStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Planning => write!(f, "planning"),
             Self::Planned => write!(f, "planned"),
             Self::InProgress => write!(f, "inProgress"),
             Self::Completed => write!(f, "completed"),
@@ -422,6 +425,7 @@ result:
 
     #[test]
     fn test_feature_status_display() {
+        assert_eq!(format!("{}", FeatureStatus::Planning), "planning");
         assert_eq!(format!("{}", FeatureStatus::Planned), "planned");
         assert_eq!(format!("{}", FeatureStatus::InProgress), "inProgress");
         assert_eq!(format!("{}", FeatureStatus::Completed), "completed");
