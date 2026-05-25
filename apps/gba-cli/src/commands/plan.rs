@@ -118,12 +118,16 @@ pub async fn run_plan(workdir: &Path, slug: &str, _verbose: bool) -> Result<()> 
         // Generate state.yml
         let state = generate_state(workdir, slug, &feature_id, &base_branch)?;
 
+        // Get the design document path
+        let design_path = specs_dir.join("design.md");
+
         println!();
         println!("Planning completed!");
         println!("Feature ID: {}", state.feature.id);
         println!("Feature slug: {}", state.feature.slug);
         println!("Worktree: {}", state.git.worktree_path);
         println!("Branch: {}", state.git.branch);
+        println!("Design document: {}", design_path.display());
         println!();
         println!("Run `gba run {}` to execute the implementation.", slug);
     } else {

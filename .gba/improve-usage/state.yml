@@ -1,0 +1,36 @@
+feature:
+  id: '0002'
+  slug: improve-usage
+  createdAt: 2026-05-25T02:02:57.074234Z
+  updatedAt: 2026-05-25T02:17:36.172613Z
+status: inProgress
+currentPhase: 1
+git:
+  worktreePath: .trees/improve-usage
+  branch: feature/0002-improve-usage
+  baseBranch: master
+phases:
+- name: state-check
+  status: completed
+  startedAt: 2026-05-25T02:12:50.140511Z
+  completedAt: 2026-05-25T02:17:36.172298Z
+  commitSha: 861a5f7
+  stats:
+    turns: 37
+    inputTokens: 1358580
+    outputTokens: 9008
+    costUsd: 7.018099999999999
+- name: completion-output
+  status: inProgress
+  startedAt: 2026-05-25T02:17:36.172613Z
+- name: agent-config
+  status: pending
+- name: rounds-integration
+  status: pending
+totalStats:
+  turns: 37
+  inputTokens: 1358580
+  outputTokens: 9008
+  costUsd: 7.018099999999999
+result:
+  merged: false

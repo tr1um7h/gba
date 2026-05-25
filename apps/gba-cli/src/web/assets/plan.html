@@ -79,7 +79,7 @@ let streamingEl = null;
   ws = new WebSocket(proto + "//" + location.host + "/ws/plan");
 
   ws.onopen = function() { addSystem("Connected"); };
-  ws.onclose = function() { addSystem("Disconnected"); };
+  ws.onclose = function() { addSystem("Disconnected"); disableInput(); };
   ws.onerror = function() {};
 
   ws.onmessage = function(evt) {
