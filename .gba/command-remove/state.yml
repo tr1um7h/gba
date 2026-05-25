@@ -1,0 +1,34 @@
+feature:
+  id: '0003'
+  slug: command-remove
+  createdAt: 2026-05-25T07:37:51.822766Z
+  updatedAt: 2026-05-25T08:23:29.156370Z
+status: inProgress
+currentPhase: 1
+git:
+  worktreePath: .trees/command-remove
+  branch: feature/0003-command-remove
+  baseBranch: master
+phases:
+- name: add-remove-command
+  status: completed
+  startedAt: 2026-05-25T08:19:20.764945Z
+  completedAt: 2026-05-25T08:23:29.156069Z
+  commitSha: b73d186
+  stats:
+    turns: 31
+    inputTokens: 1066468
+    outputTokens: 3762
+    costUsd: 5.42639
+- name: implement-remove-handler
+  status: inProgress
+  startedAt: 2026-05-25T08:23:29.156370Z
+- name: add-unit-tests
+  status: pending
+totalStats:
+  turns: 31
+  inputTokens: 1066468
+  outputTokens: 3762
+  costUsd: 5.42639
+result:
+  merged: false
