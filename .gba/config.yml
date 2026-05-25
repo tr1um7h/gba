@@ -4,6 +4,6 @@ agent:
 git:
   autoCommit: true
   autoPush: true
+  autoPr: false
 review:
   enabled: true
-  autoPr: false
