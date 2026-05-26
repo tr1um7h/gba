@@ -1048,7 +1048,7 @@ fn prepare_execution(
     };
 
     // Validate start phase
-    if start_phase >= state.phases.len() {
+    if start_phase > state.phases.len() {
         return Err(CliError::InvalidState(format!(
             "phase {} does not exist (feature has {} phases)",
             start_phase,
@@ -1059,10 +1059,14 @@ fn prepare_execution(
     // Check if resuming
     let is_resuming = start_phase > 0 || state.status == FeatureStatus::InProgress;
     if is_resuming && !options.restart {
-        println!(
-            "Resuming execution from phase {} ({})...",
-            start_phase, state.phases[start_phase].name
-        );
+        if start_phase < state.phases.len() {
+            println!(
+                "Resuming execution from phase {} ({})...",
+                start_phase, state.phases[start_phase].name
+            );
+        } else {
+            println!("All phases complete, resuming at post-phase steps...");
+        }
     }
 
     // Create task context (computes worktree_path once)
@@ -1145,8 +1149,9 @@ fn detect_resume_point(state: &FeatureState) -> usize {
         }
     }
 
-    // All phases complete, return the last phase index
-    state.phases.len().saturating_sub(1)
+    // All phases complete, return phases.len() so the pipeline
+    // proceeds directly to post-phase steps (review, verification, PR).
+    state.phases.len()
 }
 
 /// Get the latest commit SHA from the worktree.
@@ -1386,7 +1391,7 @@ mod tests {
         }
 
         let resume_point = detect_resume_point(&state);
-        assert_eq!(resume_point, 2); // Should return last phase index
+        assert_eq!(resume_point, 3); // Should return phases.len() (all complete)
     }
 
     #[test]

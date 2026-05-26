@@ -124,6 +124,15 @@ pub enum Command {
         #[arg(long, short)]
         force: bool,
     },
+
+    /// Recover a failed feature for resumption.
+    ///
+    /// Rolls back state.yml to allow resuming a failed `run` from the
+    /// failure point. No git operations are performed.
+    Recover {
+        /// Feature slug to recover.
+        slug: String,
+    },
 }
 
 #[cfg(test)]
@@ -247,6 +256,22 @@ mod tests {
     #[test]
     fn test_should_reject_remove_without_slug() {
         let result = Cli::try_parse_from(["gba", "remove"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_should_parse_recover_command() {
+        let cli =
+            Cli::try_parse_from(["gba", "recover", "my-feature"]).expect("should parse recover");
+        match cli.command {
+            Command::Recover { slug } => assert_eq!(slug, "my-feature"),
+            _ => panic!("expected Recover command"),
+        }
+    }
+
+    #[test]
+    fn test_should_reject_recover_without_slug() {
+        let result = Cli::try_parse_from(["gba", "recover"]);
         assert!(result.is_err());
     }
 }
