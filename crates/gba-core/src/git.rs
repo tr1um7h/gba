@@ -874,9 +874,16 @@ mod tests {
         let file_path = worktree_path.join("dirty-file.txt");
         fs::write(&file_path, "uncommitted content").expect("failed to write file");
 
-        // Stage the file in the worktree (need to set ceiling for worktree too)
+        // Stage the file in the worktree with full env isolation.
+        // Must clear GIT_DIR/GIT_INDEX_FILE etc. to prevent leaking into
+        // the parent repo's staging area when running under pre-commit hooks.
         let mut cmd = Command::new("git");
         cmd.current_dir(&worktree_path);
+        cmd.env_remove("GIT_DIR");
+        cmd.env_remove("GIT_WORK_TREE");
+        cmd.env_remove("GIT_INDEX_FILE");
+        cmd.env_remove("GIT_OBJECT_DIRECTORY");
+        cmd.env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
         if let Some(parent) = worktree_path.parent() {
             cmd.env("GIT_CEILING_DIRECTORIES", parent);
         }
