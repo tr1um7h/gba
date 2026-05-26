@@ -84,6 +84,9 @@ async fn run_command(command: Command, workdir: &Path, verbose: bool) -> Result<
         Command::Remove { slug, force } => {
             commands::run_remove(workdir, &slug, force).await?;
         }
+        Command::Recover { slug } => {
+            commands::run_recover(workdir, &slug).await?;
+        }
     }
 
     Ok(())

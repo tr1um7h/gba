@@ -1,0 +1,57 @@
+feature:
+  id: '0001'
+  slug: command-recover
+  createdAt: 2026-05-26T04:13:47.759411Z
+  updatedAt: 2026-05-26T04:45:56.972740Z
+status: completed
+currentPhase: 2
+git:
+  worktreePath: .trees/command-recover
+  branch: feature/0001-command-recover
+  baseBranch: master
+phases:
+- name: add-recover-command
+  status: completed
+  startedAt: 2026-05-26T04:16:27.339455Z
+  completedAt: 2026-05-26T04:26:54.760557Z
+  commitSha: bcccc05
+  stats:
+    turns: 59
+    inputTokens: 87123
+    outputTokens: 10947
+    costUsd: 1.3882428
+- name: implement-recover-logic
+  status: completed
+  startedAt: 2026-05-26T04:26:54.760846Z
+  completedAt: 2026-05-26T04:36:48.577203Z
+  commitSha: 78271ca
+  stats:
+    turns: 63
+    inputTokens: 73320
+    outputTokens: 12034
+    costUsd: 1.4846940000000004
+- name: add-tests
+  status: completed
+  startedAt: 2026-05-26T04:36:48.577534Z
+  completedAt: 2026-05-26T04:40:46.570905Z
+  commitSha: cdaccd3
+  stats:
+    turns: 25
+    inputTokens: 31857
+    outputTokens: 5776
+    costUsd: 0.4273373999999999
+totalStats:
+  turns: 147
+  inputTokens: 192300
+  outputTokens: 28757
+  costUsd: 3.3002742000000005
+result:
+  merged: false
+  review:
+    status: passed
+    iterations: 1
+    completedAt: 2026-05-26T04:43:37.289181Z
+  verification:
+    status: passed
+    iterations: 1
+    completedAt: 2026-05-26T04:45:56.958960Z
