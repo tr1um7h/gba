@@ -145,7 +145,7 @@ var progress = 0;
         break;
       case "activity": setActivity(msg.message); break;
       case "checkStarted":
-        var itemId = msg.checkType === "review" ? "reviewItem" : "verificationItem";
+        var itemId = msg.checkType === "Code Review" ? "reviewItem" : "verificationItem";
         setCheckStatus(itemId, "running");
         clearOutput();
         break;
@@ -154,7 +154,7 @@ var progress = 0;
       case "fixStarted": setActivity(msg.checkType + ": Fixing (" + msg.iteration + ")"); break;
       case "fixCompleted": break;
       case "checkCompleted":
-        var checkItemId = msg.checkType === "review" ? "reviewItem" : "verificationItem";
+        var checkItemId = msg.checkType === "Code Review" ? "reviewItem" : "verificationItem";
         setCheckStatus(checkItemId, msg.result === "passed" ? "done" : "failed");
         setActivity(msg.checkType + ": " + msg.result);
         updateProgress();
@@ -238,12 +238,22 @@ function renderPhases() {
   var html = "";
   for (var i = 0; i < phases.length; i++) {
     var p = phases[i];
+    // Cascading: if any phase after this one is running/done/failed, this one is done
+    var effectiveStatus = p.status;
+    if (effectiveStatus === "pending") {
+      for (var j = i + 1; j < phases.length; j++) {
+        if (phases[j].status === "done" || phases[j].status === "running" || phases[j].status === "failed") {
+          effectiveStatus = "done";
+          break;
+        }
+      }
+    }
     var isActive = i === currentPhase;
     var iconClass = "icon-pending";
     var icon = "&#9675;";
-    if (p.status === "running") { iconClass = "icon-running"; icon = "&#9698;"; }
-    else if (p.status === "done") { iconClass = "icon-done"; icon = "&#9679;"; }
-    else if (p.status === "failed") { iconClass = "icon-failed"; icon = "&#10007;"; }
+    if (effectiveStatus === "running") { iconClass = "icon-running"; icon = "&#9698;"; }
+    else if (effectiveStatus === "done") { iconClass = "icon-done"; icon = "&#9679;"; }
+    else if (effectiveStatus === "failed") { iconClass = "icon-failed"; icon = "&#10007;"; }
     var cls = isActive ? "phase-item active" : "phase-item";
     html += '<div class="' + cls + '"><span class="icon ' + iconClass + '">' + icon + '</span>' + (i + 1) + '. ' + p.name + '</div>';
   }
@@ -251,6 +261,20 @@ function renderPhases() {
 }
 
 function setCheckStatus(itemId, status) {
+  // Cascading: set all preceding check items to done if they're still pending
+  var checkOrder = ["reviewItem", "verificationItem", "prItem"];
+  if (status === "done" || status === "running") {
+    var targetIdx = -1;
+    for (var k = 0; k < checkOrder.length; k++) {
+      if (checkOrder[k] === itemId) { targetIdx = k; break; }
+    }
+    for (var m = 0; m < targetIdx; m++) {
+      var prevEl = document.getElementById(checkOrder[m]);
+      if (prevEl.dataset.status === "pending" || !prevEl.dataset.status) {
+        setCheckStatus(checkOrder[m], "done");
+      }
+    }
+  }
   var el = document.getElementById(itemId);
   el.dataset.status = status;
   var icon = el.querySelector(".icon");

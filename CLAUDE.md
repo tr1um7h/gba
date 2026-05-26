@@ -108,9 +108,17 @@ For project-specific documentation including architecture, directory structure, 
 - Use `# Errors`, `# Panics`, `# Safety` sections in doc comments to document failure modes.
 - Generate docs with `cargo doc --open`. Ensure docs render correctly with proper formatting.
 
+## WebUI Architecture
+
+- Use Axum as web framework with WebSocket support for browser-based UI.
+- Static HTML/CSS/JS assets are embedded using `include_str!` for single-binary distribution.
+- Protocol messages use `#[serde(tag = "type", rename_all = "camelCase")]` for easy frontend parsing.
+- Auto-open browser on server start using `webbrowser` crate; port conflict handled with retry fallback.
+- Use `mpsc` channels to bridge WebSocket handlers and worker tasks (Actor pattern).
+
 ## Code Style
 
-- always import `use` dependencies in the top of the file in the following order: std, deps, local modules.
+- Always import `use` dependencies at the top of the file in the following order: std, deps, local modules.
 - Follow Rust naming conventions: `snake_case` for functions/variables, `PascalCase` for types, `SCREAMING_SNAKE_CASE` for constants.
 - Keep functions small and focused. Embrace KISS principle. Extract complex logic into well-named functions. Unless absolutely necessary, function should not be more than 150 lines of code.
 - Prefer explicit types over `impl Trait` in public APIs for clarity. Use `impl Trait` for internal functions.
