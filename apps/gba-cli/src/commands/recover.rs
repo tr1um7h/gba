@@ -599,4 +599,152 @@ mod tests {
         assert_eq!(state.total_stats.turns, 42);
         assert!((state.total_stats.cost_usd - 1.5).abs() < f64::EPSILON);
     }
+
+    // --- Skipped status edge cases ---
+
+    #[test]
+    fn test_should_treat_skipped_review_as_non_failure() {
+        let mut state = create_failed_state_with_review_failure();
+        state.result.review = Some(CheckResultState {
+            status: CheckResultStatus::Skipped,
+            iterations: 0,
+            completed_at: Utc::now(),
+            error: None,
+        });
+
+        let stage = detect_failure_point(&state);
+        // Skipped review should fall through — no phases failed, review is Skipped
+        assert_eq!(stage, FailureStage::Other);
+    }
+
+    #[test]
+    fn test_should_treat_skipped_verification_as_non_failure() {
+        let mut state = create_failed_state_with_verification_failure();
+        state.result.verification = Some(CheckResultState {
+            status: CheckResultStatus::Skipped,
+            iterations: 0,
+            completed_at: Utc::now(),
+            error: None,
+        });
+
+        let stage = detect_failure_point(&state);
+        // Skipped verification with Passed review → Other
+        assert_eq!(stage, FailureStage::Other);
+    }
+
+    #[test]
+    fn test_should_treat_skipped_review_with_failed_verification_as_verification_failure() {
+        let mut state = create_failed_state_with_verification_failure();
+        state.result.review = Some(CheckResultState {
+            status: CheckResultStatus::Skipped,
+            iterations: 0,
+            completed_at: Utc::now(),
+            error: None,
+        });
+        // verification already has NeedsChanges status
+
+        let stage = detect_failure_point(&state);
+        assert_eq!(stage, FailureStage::Verification);
+    }
+
+    // --- Error status detection ---
+
+    #[test]
+    fn test_should_detect_error_review_status_as_failure() {
+        let mut state = create_failed_state_with_review_failure();
+        state.result.review = Some(CheckResultState {
+            status: CheckResultStatus::Error,
+            iterations: 0,
+            completed_at: Utc::now(),
+            error: Some("review crashed".to_string()),
+        });
+
+        let stage = detect_failure_point(&state);
+        assert_eq!(stage, FailureStage::Review);
+    }
+
+    #[test]
+    fn test_should_detect_error_verification_status_as_failure() {
+        let mut state = create_failed_state_with_verification_failure();
+        state.result.verification = Some(CheckResultState {
+            status: CheckResultStatus::Error,
+            iterations: 0,
+            completed_at: Utc::now(),
+            error: Some("verification crashed".to_string()),
+        });
+
+        let stage = detect_failure_point(&state);
+        assert_eq!(stage, FailureStage::Verification);
+    }
+
+    // --- Result field preservation ---
+
+    #[test]
+    fn test_should_preserve_result_on_phase_failure_rollback() {
+        let mut state = create_failed_state_with_phase_failure();
+        state.result.review = Some(CheckResultState {
+            status: CheckResultStatus::Passed,
+            iterations: 1,
+            completed_at: Utc::now(),
+            error: None,
+        });
+        state.result.verification = Some(CheckResultState {
+            status: CheckResultStatus::Passed,
+            iterations: 1,
+            completed_at: Utc::now(),
+            error: None,
+        });
+
+        let analysis = analyze_failure(&state);
+        apply_rollback(&mut state, &analysis);
+
+        // result fields should remain unchanged for phase failure
+        assert!(state.result.review.is_some());
+        assert!(state.result.verification.is_some());
+    }
+
+    #[test]
+    fn test_should_preserve_all_fields_on_other_failure_rollback() {
+        let mut state = create_failed_state_with_other_failure();
+        let analysis = analyze_failure(&state);
+
+        let review_status_before = state.result.review.as_ref().map(|r| r.status);
+        let verification_status_before = state.result.verification.as_ref().map(|v| v.status);
+
+        apply_rollback(&mut state, &analysis);
+
+        // Other failure only changes status and error — everything else preserved
+        assert_eq!(
+            state.result.review.as_ref().map(|r| r.status),
+            review_status_before
+        );
+        assert_eq!(
+            state.result.verification.as_ref().map(|v| v.status),
+            verification_status_before
+        );
+        for phase in &state.phases {
+            assert_eq!(phase.status, PhaseStatus::Completed);
+        }
+    }
+
+    #[test]
+    fn test_should_preserve_git_state_on_rollback() {
+        let mut state = create_failed_state_with_phase_failure();
+        let analysis = analyze_failure(&state);
+        apply_rollback(&mut state, &analysis);
+
+        assert_eq!(state.git.worktree_path, ".trees/test-feature");
+        assert_eq!(state.git.branch, "feature/0001-test-feature");
+        assert_eq!(state.git.base_branch, "main");
+    }
+
+    #[test]
+    fn test_should_preserve_feature_info_on_rollback() {
+        let mut state = create_failed_state_with_phase_failure();
+        let analysis = analyze_failure(&state);
+        apply_rollback(&mut state, &analysis);
+
+        assert_eq!(state.feature.id, "0001");
+        assert_eq!(state.feature.slug, "test-feature");
+    }
 }
